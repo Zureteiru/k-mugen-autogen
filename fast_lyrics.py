@@ -1,0 +1,285 @@
+import re
+import pykakasi
+import syncedlyrics
+
+from japanese_utils import convert_tokens_to_morae, get_morae_for_text
+from models import LyricLine, MoraTiming
+
+_SMALL_KANA = set("ゃゅょぁぃぅぇぉゎャュョァィゥェォヮ")
+
+_KNOWN_ALIASES = {
+    "sakanaction": "サカナクション",
+    "shin takarajima": "新宝島",
+    "hyperventilation": "ハイパーベンチレイション",
+    "brain fluid explosion girl": "脳漿炸裂ガール",
+    "rerulili": "れるりり",
+}
+
+
+def _parse_timestamp(ts_str: str) -> float:
+    """Parse [mm:ss.xx] or <mm:ss.xx> timestamp into seconds as float."""
+    parts = ts_str.split(":")
+    return int(parts[0]) * 60.0 + float(parts[1])
+
+
+def _is_credit_or_meta(text: str) -> bool:
+    """Detect whether a line is LRC metadata or credit rather than sung lyric."""
+    clean = text.strip()
+    if not clean:
+        return True
+    if re.match(r"^\[[a-zA-Z]+:", clean):
+        return True
+    # Strip any brackets
+    raw = re.sub(r"\[\d{1,2}:\d{2}(?:\.\d+)?\]", "", clean).strip()
+    raw = re.sub(r"<\d{1,2}:\d{2}(?:\.\d+)?>", "", raw).strip()
+    if not raw:
+        return True
+
+    # Check if the line has any actual speech/lyric content (kana, kanji, or alphanumeric)
+    has_text = any(
+        c.isalnum() or ("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff")
+        for c in raw
+    )
+    if not has_text:
+        return True
+
+    credits = (
+        "作词",
+        "作曲",
+        "编曲",
+        "作詞",
+        "作曲",
+        "編曲",
+        "歌：",
+        "演唱：",
+        "Lyrics by",
+        "Music by",
+        "Written by",
+        "Arranged by",
+        "Produced by",
+    )
+    for c in credits:
+        if raw.startswith(c) or f"{c}:" in raw or f"{c} :" in raw:
+            return True
+    return False
+
+
+def _tokenize_morae(text: str, k: pykakasi.kakasi | None = None) -> list[tuple[str, str]]:
+    """
+    Break a Japanese text line into individual Hiragana morae with Hepburn romaji.
+    Returns list of (hiragana_mora, hepburn_romaji).
+    """
+    morae_data = get_morae_for_text(text, k)
+    return [
+        (m["mora"], m["rom"] + (" " if m["is_token_end"] else ""))
+        for m in morae_data
+    ]
+
+
+def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
+    """Parse Enhanced or Standard LRC text into a list of LyricLine objects."""
+    lrc_text = (
+        lrc_text.replace("“", '"')
+        .replace("”", '"')
+        .replace("’", "'")
+        .replace("‘", "'")
+    )
+    is_enhanced = bool(re.search(r"<\d{1,2}:\d{2}(?:\.\d+)?>", lrc_text))
+    raw_lines = [line.strip() for line in lrc_text.splitlines() if line.strip()]
+
+    if is_enhanced:
+        timed_lines = []
+        for line in raw_lines:
+            if re.match(r"^\[[a-zA-Z]+:", line):
+                continue
+            m = re.match(r"^\[(\d{1,2}:\d{2}(?:\.\d+)?)\](.*)", line)
+            if m:
+                ts = _parse_timestamp(m.group(1))
+                rest = m.group(2).strip()
+                timed_lines.append((ts, rest))
+            elif re.search(r"<\d{1,2}:\d{2}(?:\.\d+)?>", line):
+                first_ts_m = re.search(r"<(\d{1,2}:\d{2}(?:\.\d+)?)>", line)
+                if first_ts_m:
+                    ts = _parse_timestamp(first_ts_m.group(1))
+                    timed_lines.append((ts, line))
+
+        lyric_lines: list[LyricLine] = []
+        for idx, (line_start, content) in enumerate(timed_lines):
+            next_start = timed_lines[idx + 1][0] if idx + 1 < len(timed_lines) else None
+            matches = list(re.finditer(r"<(\d{1,2}:\d{2}(?:\.\d+)?)>([^<]*)", content))
+            if not matches:
+                continue
+
+            raw_tokens = []
+            for m in matches:
+                ts = _parse_timestamp(m.group(1))
+                txt = m.group(2).strip()
+                raw_tokens.append((ts, txt))
+
+            words_timed = []
+            for j in range(len(raw_tokens)):
+                ts, txt = raw_tokens[j]
+                if not txt:
+                    continue
+                if j + 1 < len(raw_tokens):
+                    end_ts = raw_tokens[j + 1][0]
+                elif next_start and next_start > ts:
+                    end_ts = min(next_start, ts + 2.0)
+                else:
+                    end_ts = ts + 0.5
+                words_timed.append((txt, ts, end_ts))
+
+            if not words_timed:
+                continue
+
+            orig_text = re.sub(r"<\d{1,2}:\d{2}(?:\.\d+)?>", "", content).strip()
+            if _is_credit_or_meta(orig_text):
+                continue
+
+            morae_list: list[MoraTiming] = []
+            for txt, w_start, w_end in words_timed:
+                conv = k.convert(txt)
+                morae_data = convert_tokens_to_morae(conv)
+                m_count = max(1, len(morae_data))
+                m_dur = max(0.08, w_end - w_start) / m_count
+                for m_i, m in enumerate(morae_data):
+                    m_s = w_start + m_i * m_dur
+                    m_e = w_start + (m_i + 1) * m_dur
+                    rom = m["rom"] + (" " if m["is_token_end"] else "")
+                    morae_list.append(
+                        MoraTiming(
+                            hiragana=m["mora"],
+                            romaji=rom,
+                            start_sec=round(m_s, 3),
+                            end_sec=round(m_e, 3),
+                        )
+                    )
+
+            if morae_list:
+                lyric_lines.append(
+                    LyricLine(
+                        original_text=orig_text,
+                        start_sec=morae_list[0].start_sec,
+                        end_sec=morae_list[-1].end_sec,
+                        morae=morae_list,
+                    )
+                )
+        return lyric_lines
+
+    # Standard line-synced LRC
+    entries: list[tuple[float, str]] = []
+    for line in raw_lines:
+        if re.match(r"^\[[a-zA-Z]+:", line):
+            continue
+        ts_matches = list(re.finditer(r"\[(\d{1,2}:\d{2}(?:\.\d+)?)\]", line))
+        if not ts_matches:
+            continue
+        text = re.sub(r"\[\d{1,2}:\d{2}(?:\.\d+)?\]", "", line).strip()
+        for m in ts_matches:
+            entries.append((_parse_timestamp(m.group(1)), text))
+
+    entries.sort(key=lambda x: x[0])
+
+    lyric_lines = []
+    for idx, (current_start, text) in enumerate(entries):
+        if _is_credit_or_meta(text):
+            continue
+
+        morae_tokens = _tokenize_morae(text, k)
+        if not morae_tokens:
+            continue
+
+        # Next timestamp in the LRC defines line duration
+        next_start = None
+        for next_idx in range(idx + 1, len(entries)):
+            if entries[next_idx][0] > current_start:
+                next_start = entries[next_idx][0]
+                break
+
+        mora_count = len(morae_tokens)
+        natural_duration = mora_count * 0.32
+        if next_start is not None and next_start > current_start:
+            available_time = next_start - current_start
+            duration = min(available_time - 0.2, max(2.0, natural_duration))
+        else:
+            duration = max(2.5, natural_duration)
+
+        mora_duration = duration / mora_count
+        mora_timings: list[MoraTiming] = []
+
+        for m_idx, (m_hira, m_rom) in enumerate(morae_tokens):
+            m_s = current_start + m_idx * mora_duration
+            m_e = current_start + (m_idx + 1) * mora_duration
+            mora_timings.append(
+                MoraTiming(
+                    hiragana=m_hira,
+                    romaji=m_rom,
+                    start_sec=round(m_s, 3),
+                    end_sec=round(m_e, 3),
+                )
+            )
+
+        lyric_lines.append(
+            LyricLine(
+                original_text=text,
+                start_sec=round(current_start, 3),
+                end_sec=round(current_start + duration, 3),
+                morae=mora_timings,
+            )
+        )
+
+    return lyric_lines
+
+
+def fetch_and_parse_lyrics(artist: str, title: str) -> list[LyricLine] | None:
+    """
+    Fetch lyrics using syncedlyrics and parse into a list of LyricLine objects.
+    Tries enhanced (word-synced) first, falling back to line-synced LRC.
+    """
+    k = pykakasi.kakasi()
+    query = f"{artist} {title}".strip()
+
+    # 1. Try enhanced word-synced search first
+    lrc_text = syncedlyrics.search(query, enhanced=True, providers=["netease", "lrclib"])
+
+    # 2. Fall back to standard line-synced search
+    if not lrc_text:
+        lrc_text = syncedlyrics.search(query, providers=["netease", "lrclib"])
+
+    # 3. If romanized search returns nothing, try known Japanese name aliases
+    if not lrc_text:
+        alt_artist = _KNOWN_ALIASES.get(artist.lower().strip(), artist)
+        alt_title = _KNOWN_ALIASES.get(title.lower().strip(), title)
+        alt_query = f"{alt_artist} {alt_title}".strip()
+        if alt_query != query:
+            lrc_text = syncedlyrics.search(alt_query, enhanced=True, providers=["netease", "lrclib"])
+            if not lrc_text:
+                lrc_text = syncedlyrics.search(alt_query, providers=["netease", "lrclib"])
+
+    if not lrc_text:
+        return None
+
+    parsed = _parse_lrc(lrc_text, k)
+    return parsed if parsed else None
+
+
+def parse_lrc_text(lrc_text: str, k: pykakasi.kakasi | None = None) -> list[LyricLine]:
+    """Parse raw LRC text string into a list of LyricLine objects."""
+    if k is None:
+        from japanese_utils import get_kakasi
+        k = get_kakasi()
+    return _parse_lrc(lrc_text, k)
+
+
+if __name__ == "__main__":
+    lines = fetch_and_parse_lyrics("Sakanaction", "Shin Takarajima")
+    if lines:
+        for i, line in enumerate(lines[:3], 1):
+            print(f"--- Line {i} ---")
+            print(f"Original Text: {line.original_text}")
+            print(f"Timing: {line.start_sec:.2f}s -> {line.end_sec:.2f}s")
+            print(f"Morae ({len(line.morae)} total):")
+            for m in line.morae:
+                print(f"  [{m.start_sec:.2f} - {m.end_sec:.2f}] (cs={m.duration_cs}) {m.hiragana} -> {m.romaji}")
+    else:
+        print("No lyrics found.")

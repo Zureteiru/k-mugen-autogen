@@ -1,0 +1,7 @@
+yt-dlp
+syncedlyrics
+pykakasi
+stable-ts
+audio-separator[cpu]
+pydantic
+pyyaml

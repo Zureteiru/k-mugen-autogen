@@ -1,0 +1,35 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python cache & build
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Heavy media downloads (keep repo light; audio/video are downloaded on-the-fly)
+downloads/*.mp4
+downloads/*.webm
+downloads/*.mp3
+downloads/*.wav
+downloads/*.m4a
+downloads/*.flac
+downloads/*.ogg
+
+# Retain guide LRCs if downloaded
+!downloads/*.lrc
+
+# Windows Task Scheduler temporary scripts
+run_mpv.ps1
+
+# IDE and OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
