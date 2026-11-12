@@ -1,7 +1,8 @@
+import dataclasses
 import logging
 import os
 import re
-import types
+import statistics
 import pykakasi
 
 from japanese_utils import convert_tokens_to_morae, get_morae_for_text
@@ -92,6 +93,90 @@ def isolate_vocals(audio_path: str, output_dir: str) -> tuple[str, str]:
     return vocal_path, inst_path
 
 
+def _align_global(model, audio, lines: list[str], lang: str) -> list[list | None]:
+    """Run one forced alignment over all lines; one word list per input line, None when missing."""
+    res = model.align(audio, "\n".join(lines), language=lang, original_split=True)
+    if not res or not hasattr(res, "segments") or len(res.segments) != len(lines):
+        return [None] * len(lines)
+    out: list[list | None] = []
+    for seg in res.segments:
+        words = [w for w in getattr(seg, "words", []) if getattr(w, "word", "").strip()]
+        out.append(words or None)
+    return out
+
+
+def _line_is_plausible(
+    words: list,
+    n_morae: int,
+    prev_end: float,
+    guide: LyricLine | None,
+    offset: float,
+) -> bool:
+    """Accept a line's aligned words only if their pace, order and (optional) guide position make sense."""
+    if not words:
+        return False
+    start = words[0].start
+    end = words[-1].end
+    if not 0.04 <= (end - start) / max(1, n_morae) <= 1.5:
+        return False
+    if start < prev_end - 0.1:
+        return False
+    if guide is not None and abs(start - (guide.start_sec + offset)) >= 3.0:
+        return False
+    return True
+
+
+def _align_window(model, audio, text: str, t0: float, t1: float, lang: str) -> list | None:
+    """Align one line of text inside audio[t0:t1] and return its words in absolute time."""
+    sr = 16000
+    t0 = max(0.0, t0)
+    s0 = int(round(t0 * sr))
+    s1 = min(len(audio), int(round(t1 * sr)))
+    if s1 <= s0:
+        return None
+    try:
+        res = model.align(audio[s0:s1], text, language=lang)
+    except Exception as e:
+        logger.warning(f"Window alignment failed for line '{text}' ({e})")
+        return None
+
+    words = []
+    if res and res.segments and res.segments[0].words:
+        for w in res.segments[0].words:
+            if getattr(w, "word", "").strip():
+                w.start += t0
+                w.end += t0
+                words.append(w)
+
+    # Re-align dropped trailing words of English lines
+    expected_words = text.split()
+    if lang != "ja" and 0 < len(words) < len(expected_words):
+        aligned_chars = sum(len(w.word.strip()) for w in words)
+        expected_chars = sum(len(w) for w in expected_words)
+        if aligned_chars < expected_chars * 0.8:
+            rem_text = " ".join(expected_words[len(words):])
+            new_t0 = words[-1].end
+            if t1 > new_t0 + 0.2:
+                more = _align_window(model, audio, rem_text, new_t0, t1, "en")
+                if more:
+                    words.extend(more)
+
+    return words or None
+
+
+def _shift_line(line: LyricLine, offset: float) -> LyricLine:
+    """Return a copy of line with its start, end and every mora shifted by offset seconds."""
+    return dataclasses.replace(
+        line,
+        start_sec=line.start_sec + offset,
+        end_sec=line.end_sec + offset,
+        morae=[
+            dataclasses.replace(m, start_sec=m.start_sec + offset, end_sec=m.end_sec + offset)
+            for m in line.morae
+        ],
+    )
+
+
 def force_align_japanese(
     vocal_path: str,
     raw_lyrics_text: str,
@@ -130,143 +215,72 @@ def force_align_japanese(
         else:
             raise e
 
-    segments: list = []
-    # Step 1: Try global forced alignment first across the entire audio track
-    logger.info("Attempting global forced alignment on audio file...")
-    lyrics_payload = "\n".join(raw_lines)
+    audio = whisper.load_audio(vocal_path)
+    sr = 16000
+    total_audio_sec = len(audio) / sr
+
     is_mostly_ja = any(
         ("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff")
-        for c in lyrics_payload
+        for c in "\n".join(raw_lines)
     )
     global_lang = "ja" if is_mostly_ja else "en"
 
+    logger.info("Running global forced alignment on audio file...")
     try:
-        global_res = model.align(vocal_path, lyrics_payload, language=global_lang, original_split=True)
-        if global_res and hasattr(global_res, "segments") and len(global_res.segments) == len(raw_lines):
-            aligned_count = sum(
-                1 for seg in global_res.segments
-                if [w for w in getattr(seg, "words", []) if getattr(w, "word", "").strip()]
-            )
-            if aligned_count >= len(raw_lines) * 0.85:
-                logger.info(f"Global alignment succeeded with high coverage ({aligned_count}/{len(raw_lines)} lines).")
-                segments = global_res.segments
+        global_words = _align_global(model, audio, raw_lines, global_lang)
     except Exception as e:
         logger.warning(f"Global alignment attempt encountered error: {e}")
+        global_words = [None] * len(raw_lines)
 
-    # Step 2: Fall back to anchored slice alignment if global alignment had low coverage
-    if not segments and lrc_guide_lines and len(lrc_guide_lines) == len(raw_lines):
-        logger.info("Using LRC guide windows for anchored line-by-line Whisper alignment...")
-        audio = whisper.load_audio(vocal_path)
-        sr = 16000
-        total_audio_sec = len(audio) / sr
-        last_aligned_end = 0.0
-
-        # Automatic LRC offset probe to detect video intro length mismatches
-        try:
-            probe_slice = audio[: int(min(total_audio_sec, 60.0) * sr)]
-            probe_res = model.align(probe_slice, lrc_guide_lines[0].original_text, language=global_lang)
-            if probe_res and probe_res.segments and probe_res.segments[0].words:
-                actual_start = probe_res.segments[0].words[0].start
-                guide_start = lrc_guide_lines[0].start_sec
-                offset = actual_start - guide_start
-                if abs(offset) > 1.2:
-                    logger.info(f"Detected global LRC offset of {offset:+.2f}s! Shifting guide windows...")
-                    for g in lrc_guide_lines:
-                        g.start_sec = max(0.0, g.start_sec + offset)
-                        g.end_sec = max(0.0, g.end_sec + offset)
-        except Exception as e:
-            logger.warning(f"Offset probe skipped: {e}")
-
-        for idx, lrc_line in enumerate(lrc_guide_lines):
-            orig_text = lrc_line.original_text.strip()
-            # Clean punctuation spacing and quotes
-            cleaned_text = re.sub(r"([.,!?;:…])([a-zA-Z])", r"\1 \2", orig_text)
-            cleaned_text = (
-                cleaned_text.replace("“", '"')
-                .replace("”", '"')
-                .replace("’", "'")
-                .replace("‘", "'")
-            )
-
-            is_ja = any(
-                ("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff")
-                for c in cleaned_text
-            )
-            lang = "ja" if is_ja else "en"
-
-            next_start = (
-                lrc_guide_lines[idx + 1].start_sec
-                if idx + 1 < len(lrc_guide_lines)
-                else lrc_line.end_sec + 4.0
-            )
-            t0 = max(last_aligned_end, lrc_line.start_sec - 0.35)
-            t1 = min(total_audio_sec, max(lrc_line.end_sec + 0.5, next_start - 0.05))
-            if t1 <= t0 + 0.3:
-                t1 = min(total_audio_sec, t0 + 1.2)
-
-            s0 = int(round(t0 * sr))
-            s1 = int(round(t1 * sr))
-            slice_audio = audio[s0:s1]
-
-            try:
-                res = model.align(slice_audio, cleaned_text, language=lang)
-                words = []
-                if res and res.segments and res.segments[0].words:
-                    for w in res.segments[0].words:
-                        if getattr(w, "word", "").strip():
-                            w.start += t0
-                            w.end += t0
-                            words.append(w)
-
-                # Check if multi-pass alignment is needed for dropped trailing words
-                expected_words = cleaned_text.split()
-                if not is_ja and 0 < len(words) < len(expected_words):
-                    aligned_chars = sum(len(w.word.strip()) for w in words)
-                    expected_chars = sum(len(w) for w in expected_words)
-                    if aligned_chars < expected_chars * 0.8:
-                        rem_text = " ".join(expected_words[len(words):])
-                        new_t0 = words[-1].end
-                        if t1 > new_t0 + 0.2:
-                            new_s0 = int(round(new_t0 * sr))
-                            slice2 = audio[new_s0:s1]
-                            try:
-                                res2 = model.align(slice2, rem_text, language="en")
-                                if res2 and res2.segments and res2.segments[0].words:
-                                    for w2 in res2.segments[0].words:
-                                        if getattr(w2, "word", "").strip():
-                                            w2.start += new_t0
-                                            w2.end += new_t0
-                                            words.append(w2)
-                            except Exception:
-                                pass
-
-                if words:
-                    last_aligned_end = words[-1].end
-                    seg_obj = types.SimpleNamespace(words=words)
-                    segments.append(seg_obj)
-                else:
-                    last_aligned_end = lrc_line.end_sec
-                    segments.append(None)
-            except Exception as e:
-                logger.warning(f"Slice alignment failed for line '{orig_text}' ({e})")
-                last_aligned_end = lrc_line.end_sec
-                segments.append(None)
-
-    logger.info(f"Received {len(segments)} segments from stable_whisper.")
+    guides = lrc_guide_lines if lrc_guide_lines and len(lrc_guide_lines) == len(raw_lines) else None
+    offsets = [
+        global_words[i][0].start - guides[i].start_sec
+        for i in range(len(raw_lines))
+        if guides and global_words[i]
+    ]
+    offset = statistics.median(offsets) if offsets else 0.0
+    if guides:
+        logger.info(f"LRC guide offset (median of global alignment): {offset:+.2f}s")
 
     lyric_lines: list[LyricLine] = []
 
     for line_idx, orig_line in enumerate(raw_lines):
-        words = []
-        if line_idx < len(segments) and segments[line_idx] is not None:
-            seg = segments[line_idx]
-            words = [w for w in getattr(seg, "words", []) if getattr(w, "word", "").strip()]
+        guide = guides[line_idx] if guides else None
+        prev_end = lyric_lines[-1].end_sec if lyric_lines else 0.0
+        n_morae = len(get_morae_for_text(orig_line, k))
 
-        guide = lrc_guide_lines[line_idx] if (lrc_guide_lines and line_idx < len(lrc_guide_lines)) else None
+        words = global_words[line_idx] or []
+        if not _line_is_plausible(words, n_morae, prev_end, guide, offset):
+            words = []
+            if guide is not None:
+                cleaned_text = re.sub(r"([.,!?;:…])([a-zA-Z])", r"\1 \2", orig_line)
+                cleaned_text = (
+                    cleaned_text.replace("“", '"')
+                    .replace("”", '"')
+                    .replace("’", "'")
+                    .replace("‘", "'")
+                )
+                lang = "ja" if any(
+                    ("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff")
+                    for c in cleaned_text
+                ) else "en"
+                g_end = guide.end_sec + offset
+                next_start = (
+                    guides[line_idx + 1].start_sec + offset
+                    if line_idx + 1 < len(guides)
+                    else g_end + 4.0
+                )
+                t0 = max(prev_end, guide.start_sec + offset - 0.35)
+                t1 = min(total_audio_sec, max(g_end + 0.5, next_start - 0.05))
+                if t1 <= t0 + 0.3:
+                    t1 = min(total_audio_sec, t0 + 1.2)
+                window_words = _align_window(model, audio, cleaned_text, t0, t1, lang)
+                if window_words and _line_is_plausible(window_words, n_morae, prev_end, guide, offset):
+                    words = window_words
 
         if not words:
             if guide:
-                lyric_lines.append(guide)
+                lyric_lines.append(_shift_line(guide, offset))
             else:
                 prev_end = lyric_lines[-1].end_sec if lyric_lines else 0.0
                 start_fallback = prev_end + 0.50
