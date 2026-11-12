@@ -6,8 +6,6 @@ import shutil
 import subprocess
 import sys
 
-import yt_dlp
-
 from aligner import force_align_japanese, isolate_vocals
 from ass_compiler import compile_ass
 from fast_lyrics import fetch_and_parse_lyrics, parse_lrc_text
@@ -48,6 +46,8 @@ def download_video_yt_dlp(source: str, output_dir: str = "./downloads") -> tuple
         if not os.path.exists(source):
             raise FileNotFoundError(f"Local video file does not exist: {source}")
         return os.path.abspath(source), {}
+
+    import yt_dlp
 
     os.makedirs(output_dir, exist_ok=True)
     ydl_opts = {
