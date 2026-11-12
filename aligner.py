@@ -56,13 +56,8 @@ def isolate_vocals(audio_path: str, output_dir: str) -> tuple[str, str]:
     model_name = "UVR-MDX-NET-Inst_HQ_3.onnx"
     logger.info(f"Initializing Separator with model: {model_name}")
 
-    try:
-        separator = Separator(output_dir=output_dir)
-        separator.load_model(model_filename=model_name)
-    except Exception as e:
-        logger.warning(f"Failed to load {model_name} ({e}). Attempting default separation model...")
-        separator = Separator(output_dir=output_dir)
-        separator.load_model()
+    separator = Separator(output_dir=output_dir)
+    separator.load_model(model_filename=model_name)
 
     logger.info("Running stem separation...")
     output_files = separator.separate(audio_path)
@@ -73,17 +68,15 @@ def isolate_vocals(audio_path: str, output_dir: str) -> tuple[str, str]:
 
     for fname in output_files:
         full_path = os.path.join(output_dir, fname) if not os.path.isabs(fname) else fname
-        lower_name = fname.lower()
-        if "vocal" in lower_name:
+        # audio-separator names stems "<input>_(Vocals)_<model>.wav" / "<input>_(Instrumental)_<model>.wav";
+        # the last marker is the stem, since the input name may contain markers or words like "vocal".
+        markers = re.findall(r"\((Vocals|Instrumental)\)", os.path.basename(fname))
+        if not markers:
+            continue
+        if markers[-1] == "Vocals":
             vocal_path = full_path
-        elif "inst" in lower_name or "instrumental" in lower_name:
+        else:
             inst_path = full_path
-
-    # Fallbacks if file naming differs
-    if not vocal_path and output_files:
-        vocal_path = os.path.join(output_dir, output_files[0]) if not os.path.isabs(output_files[0]) else output_files[0]
-    if not inst_path and len(output_files) > 1:
-        inst_path = os.path.join(output_dir, output_files[1]) if not os.path.isabs(output_files[1]) else output_files[1]
 
     if not vocal_path or not inst_path:
         raise RuntimeError(f"Failed to isolate stems from {audio_path}. Generated files: {output_files}")
