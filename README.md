@@ -8,7 +8,7 @@ Given a YouTube URL or media file, `k-mugen-autogen`:
 3. Optionally isolates vocal stems with MDX-Net via `audio-separator`.
 4. Performs forced alignment using `stable-ts` (Stable-Whisper) on GPU or CPU.
 5. Converts Japanese kanji/kana to romanized morae with strict phonological rules (geminated sokuon, particles, compound kana).
-6. Compiles drift-free centisecond Karaoke Mugen `.ass` files with `\k` and `\kf` highlight tags.
+6. Compiles drift-free centisecond `.ass` files in the Karaoke Mugen (kara.moe) house style: the official KM template styles, top of screen, white → orange fill, 0.9 s lead-in with fade.
 7. Launches `mpv` with the synchronized video and subtitles (skipped if `mpv` is not on `PATH` or with `--no-play`).
 
 ---
@@ -46,6 +46,14 @@ python main.py "song.mp4" --artist "RADWIMPS" --title "Hyperventilation" --no-pl
 ```
 
 For a URL, artist and title are read from the video metadata when `--artist` / `--title` are omitted.
+
+### Test UI
+```bash
+.venv/bin/python ui_server.py            # macOS / Linux
+.venv\Scripts\python.exe ui_server.py     # Windows
+# then open http://127.0.0.1:8765
+```
+Preview generated `.ass` files over their video with libass (the renderer Karaoke Mugen uses), run the pipeline, try the romanizer and run the tests from the browser.
 
 ### Development
 ```bash

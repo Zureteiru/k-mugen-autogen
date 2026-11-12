@@ -31,3 +31,7 @@ Thumbs.db
 *.swo
 .vscode/
 .idea/
+
+# Test UI uploads and converted media
+uploads/
+.pytest_cache/

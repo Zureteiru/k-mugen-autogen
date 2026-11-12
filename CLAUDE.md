@@ -28,7 +28,7 @@ Acoustic Forced Alignment (one global pass + per-line gate, LRC-anchored window 
 Phonological Japanese Romanization & Mora Segmentation
        │
        ▼ [ass_compiler.py]
-Continuous Drift-Free Centisecond Tagging ({\k} / {\kf}) -> .ass File
+Karaoke Mugen (kara.moe) house style, drift-free centisecond {\k} tagging -> .ass File
        │
        ▼ [main.py]
 mpv playback (if mpv is on PATH)
@@ -43,7 +43,8 @@ mpv playback (if mpv is on PATH)
 | [`main.py`](file:///main.py) | CLI entrypoint (positional `source`, optional `--artist`/`--title`), single yt-dlp download, pipeline orchestration, and a plain `mpv` launcher. |
 | [`aligner.py`](file:///aligner.py) | Audio forced alignment using `stable-ts` (Whisper). Implements one global whole-track alignment, a per-line plausibility gate, window re-alignment against the LRC guide with a median offset, and vocal stem isolation via MDX-Net (stems identified by the `(Vocals)` / `(Instrumental)` filename marker). |
 | [`japanese_utils.py`](file:///japanese_utils.py) | Japanese linguistic parser built on fugashi + unidic-lite. Sokuon (`っ`/`ッ`) consonant gemination, small kana (`ゃ`/`ゅ`/`ょ`/`ぁ`...) contraction, particle `は` -> `wa` / `へ` -> `e`, `ー` vowel repetition, and part-of-speech based word-space suppression. |
-| [`ass_compiler.py`](file:///ass_compiler.py) | Compiles `LyricLine` data into Advanced SubStation Alpha (`.ass`) format. Computes continuous absolute centisecond timing (`\k` / `\kf`) to prevent timing drift. |
+| [`ass_compiler.py`](file:///ass_compiler.py) | Compiles `LyricLine` data into Advanced SubStation Alpha (`.ass`) format. Emits the official Karaoke Mugen template output (styles, templater Comment, `karaoke` Comment + `fx` Dialogue per line) with continuous absolute centisecond timing to prevent drift. |
+| `ui_server.py` + `ui/` | Local test bench (`.venv/bin/python ui_server.py` -> http://127.0.0.1:8765): libass preview via vendored JASSUB 1.8.8, pipeline runner, romaji/LRC lab, pytest runner. |
 | [`fast_lyrics.py`](file:///fast_lyrics.py) | Lyrics fetcher using `syncedlyrics` (returns plain text when no timestamps exist). Parses Standard `[mm:ss.xx]` and Enhanced `<mm:ss.xx>` LRC lines, per line, into line objects. |
 | [`models.py`](file:///models.py) | Dataclasses: `MoraTiming` and `LyricLine`. |
 | [`tests/test_core.py`](file:///tests/test_core.py) | pytest regression tests (offline; no Whisper, torch, yt-dlp or network). |
@@ -58,8 +59,10 @@ mpv playback (if mpv is on PATH)
    - **Morphological analysis:** readings and parts of speech come from fugashi + unidic-lite.
    - **Particle conversion:** particle `は` -> `wa`, particle `へ` -> `e`; `ー` repeats the previous vowel.
    - **Grammatical suffix cohesion:** auxiliaries, conjunctive particles and suffixes (`た`, `て`, `ない`, `たい`, `ます`) stay attached to the preceding stem without unintended spaces.
-2. **Karaoke Mugen ASS Styling & Drift-Free Centisecond Tracking ([`ass_compiler.py`](file:///ass_compiler.py)):**
-   - Clean single-layer Romaji subtitle output styled for 1080p karaoke (no distracting duplicate Kanji ruby lines above).
+2. **Karaoke Mugen (kara.moe) ASS Style & Drift-Free Centisecond Tracking ([`ass_compiler.py`](file:///ass_compiler.py)):**
+   - Mirrors the official KM template (https://docs.karaokes.moe/aegisub/sampleKaraokeMugen.ass) as Aegisub leaves it after "Apply karaoke template": `PlayResX/Y: 0`, the `Sample KM [Up]` style (bold Arial 24, top of screen, white filling orange `&H00008AFF`, 1.5 outline), the templater `Comment`, and per line a `karaoke` Comment plus an `fx` Dialogue.
+   - Each line appears 0.9 s early (lead filled by an empty `\k90`, or `\k<start>` for lines before 0.9 s), `\fad(300,200)`, and stays 0.2 s after the last syllable. Lines overlap on purpose, so libass stacks current + next line (the kara.moe two-line look).
+   - Syllables use `\k`; `\kf` only for syllables over 100 cs (KM convention). Romaji only, no Kanji line.
    - Continuous `current_sec` tracking from `event_start_sec`: pauses between words or vocal rests are dynamically encoded as silent `{\k{gap_cs}}` tags, ensuring that later syllables highlight at their exact acoustic time rather than drifting.
 3. **Songs used during development** (their old `.ass` outputs predate the remediation, are no longer tracked and are only in git history; regenerate them rather than trusting them):
    - *Sakanaction - Shin Takarajima*, *Sakanaction - Ame(A)*, *RADWIMPS - Hyperventilation*, *KOTOKO - I pray to stop my cry*, *rerulili - Brain Fluid Explosion Girl*

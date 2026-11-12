@@ -146,3 +146,53 @@ def test_safe_filename_has_no_forbidden_characters(name):
     assert not any(c in result for c in '<>:"/\\|?*')
     assert not any(ord(c) < 32 for c in result)
     assert result == result.rstrip(". ")
+
+
+# --- Karaoke Mugen (kara.moe) house style ---------------------------------------------------
+
+KM_UP_STYLE = (
+    "Style: Sample KM [Up],Arial,24,&H00008AFF,&H00FFFFFF,&H00000000,&H00000000,"
+    "-1,0,0,0,100,100,0,0,1,1.5,0,8,2,2,20,1"
+)
+
+
+def _km_song(tmp_path):
+    from ass_compiler import compile_ass
+
+    lines = [
+        LyricLine("あい", 0.4, 1.0, [MoraTiming("あ", "a", 0.4, 0.6), MoraTiming("い", "i ", 0.6, 1.0)]),
+        LyricLine("うえ", 2.0, 3.8, [MoraTiming("う", "u", 2.0, 3.2), MoraTiming("え", "e", 3.2, 3.8)]),
+        LyricLine("おか", 4.0, 5.0, [MoraTiming("お", "o", 4.0, 4.5), MoraTiming("か", "ka", 4.5, 5.0)]),
+    ]
+    content = compile_ass(lines, "T", str(tmp_path / "t.ass"))
+    fx = [l for l in content.splitlines() if l.startswith("Dialogue:") and ",fx," in l]
+    return content, fx
+
+
+def test_km_header_style_and_template(tmp_path):
+    content, _ = _km_song(tmp_path)
+    assert KM_UP_STYLE in content.splitlines()
+    assert "PlayResX: 0" in content and "PlayResY: 0" in content
+    assert "ScaledBorderAndShadow: yes" in content
+    assert any(l.startswith("Comment:") and "template pre-line all keeptags" in l for l in content.splitlines())
+    assert sum(",karaoke," in l for l in content.splitlines()) == 3
+
+
+def test_km_lead_in_fade_and_tail(tmp_path):
+    _, fx = _km_song(tmp_path)
+    # Normal line: appears 0.9 s early with \k90\fad(300,200), ends 0.2 s after the last syllable
+    assert fx[1].startswith("Dialogue: 0,0:00:01.10,0:00:04.00,Sample KM [Up],")
+    assert "fx,{\\k90\\fad(300,200)}" in fx[1]
+    # Line starting before 0.9 s: lead and fade-in equal its start (template's $start < 900 branch)
+    assert fx[0].startswith("Dialogue: 0,0:00:00.00,0:00:01.20,")
+    assert "fx,{\\k40\\fad(400,200)}" in fx[0]
+
+
+def test_km_k_vs_kf_and_overlap(tmp_path):
+    _, fx = _km_song(tmp_path)
+    assert "{\\k20}a{\\k40}i " in fx[0]  # short syllables: instant fill
+    assert "{\\kf120}u" in fx[1]  # > 100 cs: progressive fill
+    # Lines overlap (next line's lead-in starts before this one ends) so libass stacks them
+    end_1 = fx[1].split(",")[2]
+    start_2 = fx[2].split(",")[1]
+    assert start_2 < end_1

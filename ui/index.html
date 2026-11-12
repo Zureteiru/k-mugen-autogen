@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k-mugen-autogen Test Bench</title>
+<style>
+:root{--bg:#14161c;--panel:#1d2029;--line:#2c3040;--fg:#e8eaf0;--mut:#8b91a5;--acc:#ffd23f;--ok:#4cd18a;--bad:#ff6b6b;--blue:#5aa9ff}
+@media (prefers-color-scheme:light){:root{--bg:#f4f5f8;--panel:#fff;--line:#d9dce5;--fg:#1c1f29;--mut:#656b80;--acc:#c98a00;--ok:#13875a;--bad:#d03a3a;--blue:#1d6fd6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,system-ui,sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
+header h1{font-size:15px;margin:0;white-space:nowrap}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:none;border:0;color:var(--mut);padding:7px 14px;border-radius:6px;cursor:pointer;font:inherit}
+nav button.on{background:var(--bg);color:var(--fg);font-weight:600}
+main{padding:20px;max-width:1200px;margin:0 auto}
+section{display:none}section.on{display:block}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 12px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mut);flex:1;min-width:180px}
+input,select,textarea{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit;width:100%}
+textarea{min-height:130px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+button.btn{background:var(--blue);color:#fff;border:0;border-radius:6px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
+button.btn.sec{background:var(--line);color:var(--fg)}
+button.btn.bad{background:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+.hint{color:var(--mut);font-size:12px;margin:6px 0 0}
+/* stage */
+.stage{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:16/9;width:100%}
+.stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+.stage .bgph{position:absolute;inset:0;background:radial-gradient(circle at 30% 20%,#2a3050,#0a0b10)}
+.stage .JASSUB{position:absolute!important;inset:0;pointer-events:none}
+.stage .JASSUB canvas{position:absolute;pointer-events:none}
+#subCanvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--mut)}
+.badge .sw{font:700 13px Arial,sans-serif;padding:2px 8px;border-radius:4px;background:#222;-webkit-text-stroke:.6px #000;paint-order:stroke}
+.badge.ok b{color:var(--ok)}.badge.old b{color:var(--bad)}
+.notice{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:#000c;color:#fff;z-index:2}
+.notice[hidden]{display:none}
+.notice .hint{color:#bbb;max-width:90%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bar{display:flex;align-items:center;gap:10px;margin-top:10px}
+.bar input[type=range]{flex:1;padding:0}
+.mono{font-family:ui-monospace,Menlo,monospace}
+.tl{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.tl div{display:grid;grid-template-columns:90px 70px 1fr auto;gap:10px;padding:5px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px}
+.tl div:hover{background:var(--bg)}
+.tl div.cur{background:color-mix(in srgb,var(--acc) 22%,transparent)}
+.tl .flag{color:var(--bad);font-size:11px}
+.tl .t{color:var(--mut)}
+pre.log{background:#0b0c10;color:#c9d1d9;border-radius:8px;padding:12px;max-height:420px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;margin:0}
+.pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600;background:var(--line)}
+.pill.running{background:var(--blue);color:#fff}.pill.done{background:var(--ok);color:#fff}.pill.failed,.pill.cancelled{background:var(--bad);color:#fff}
+.morae{display:flex;flex-wrap:wrap;gap:3px;margin-top:6px}
+.morae span{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:2px 6px;text-align:center;font-size:12px}
+.morae span small{display:block;color:var(--mut);font-size:10px}
+.morae span.end{margin-right:10px}
+.morae span.sok{border-color:var(--acc)}
+.lab-line{border-bottom:1px solid var(--line);padding:10px 0}
+.lab-line .rom{font-size:17px;font-weight:600;color:var(--acc)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:800px){.grid2{grid-template-columns:1fr}.tl div{grid-template-columns:70px 1fr}.tl .t2,.tl .flag{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎤 k-mugen-autogen · Test Bench</h1>
+  <nav id="nav">
+    <button data-tab="preview" class="on">1 · Preview</button>
+    <button data-tab="generate">2 · Generate</button>
+    <button data-tab="lab">3 · Romaji / LRC Lab</button>
+    <button data-tab="tests">4 · Unit tests</button>
+  </nav>
+</header>
+<main>
+
+<!-- PREVIEW -->
+<section id="preview" class="on">
+  <div class="card">
+    <div class="row">
+      <label>Subtitle (.ass)
+        <select id="assSel"></select></label>
+      <label>Video / audio (optional)
+        <select id="mediaSel"></select></label>
+      <label style="flex:0 0 auto;min-width:0">&nbsp;<button class="btn sec" id="refresh">↻ Refresh</button></label>
+    </div>
+    <p class="hint">Pick a generated <b>.ass</b> and the matching media. Without media, a built-in clock plays the timeline. Subtitles are drawn by <b>libass</b> (the same engine Karaoke Mugen / kara.moe and mpv use), so what you see here is what the file really looks like.</p>
+    <p class="badge" id="styleBadge"></p>
+  </div>
+  <div class="card">
+    <div class="stage" id="stage">
+      <div class="bgph"></div>
+      <video id="vid" playsinline></video>
+      <canvas id="subCanvas"></canvas>
+      <div class="notice" id="notice" hidden>
+        <div id="noticeMsg"></div>
+        <button class="btn" id="convert">Convert to H.264 (plays everywhere)</button>
+        <div class="mono hint" id="convLog"></div>
+      </div>
+    </div>
+    <div class="bar">
+      <button class="btn" id="play">▶ Play</button>
+      <input type="range" id="seek" min="0" max="1" step="0.01" value="0">
+      <span class="mono" id="clock">0:00.00</span>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label>Sync offset: <b class="mono" id="offVal">0.00s</b> (shifts subtitles; positive = later)
+        <input type="range" id="offset" min="-15" max="15" step="0.05" value="0"></label>
+      <label style="flex:0 0 auto;min-width:0">Speed
+        <select id="rate"><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option></select></label>
+      <button class="btn sec" id="nudgeM">−0.1s</button>
+      <button class="btn sec" id="nudgeP">+0.1s</button>
+      <button class="btn sec" id="saveOff">⬇ Download shifted .ass</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Lines <span id="lineStats" class="hint"></span></h2>
+    <div class="tl" id="tl"></div>
+    <p class="hint">Click a line to jump to it. Red flags mark suspicious timing (overlap, very short, big internal gap).</p>
+  </div>
+</section>
+
+<!-- GENERATE -->
+<section id="generate">
+  <div class="card">
+    <h2>Run the full pipeline</h2>
+    <div class="row">
+      <label style="flex:3">YouTube URL
+        <input id="gUrl" placeholder="https://youtu.be/…"></label>
+      <label style="flex:2">…or a local audio/video file
+        <input type="file" id="gFile" accept="audio/*,video/*"></label>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label>Artist <input id="gArtist" placeholder="auto from URL (required for local files)"></label>
+      <label>Title <input id="gTitle" placeholder="auto from URL (required for local files)"></label>
+    </div>
+    <label style="margin-top:12px">Lyrics (optional — plain text or LRC; otherwise fetched online)
+      <textarea id="gLyrics" placeholder="Paste Japanese lyrics here, or leave empty to fetch with syncedlyrics"></textarea></label>
+    <div class="row" style="margin-top:12px">
+      <label style="flex:0 0 auto;min-width:0;flex-direction:row;align-items:center;gap:8px;color:var(--fg)">
+        <input type="checkbox" id="gVocals" style="width:auto"> Isolate vocals first (slower, cleaner alignment)</label>
+      <span style="flex:1"></span>
+      <button class="btn bad" id="gCancel" disabled>Cancel</button>
+      <button class="btn" id="gRun">▶ Generate .ass</button>
+    </div>
+    <p class="hint">Runs <span class="mono">main.py --no-play</span> using the project's .venv. First run downloads Whisper models and can take several minutes.</p>
+  </div>
+  <div class="card">
+    <h2>Progress <span id="gStatus" class="pill">idle</span></h2>
+    <pre class="log" id="gLog">Nothing running yet.</pre>
+    <div class="row" style="margin-top:12px"><button class="btn" id="gOpen" style="display:none">▶ Open result in Preview</button></div>
+  </div>
+</section>
+
+<!-- LAB -->
+<section id="lab">
+  <div class="grid2">
+    <div class="card">
+      <h2>Romanization (offline, instant)</h2>
+      <textarea id="labText">きっと君は、ゲームへ行く
+いっちゃった
+今日は雨だから、ありがとう</textarea>
+      <div class="row" style="margin-top:10px"><button class="btn" id="labGo">Romanize</button></div>
+      <div id="labOut" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <h2>LRC → ASS (no alignment, instant)</h2>
+      <textarea id="lrcText" placeholder="[00:12.34] first line&#10;[00:15.80] second line"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="lrcGo">Compile &amp; preview</button>
+        <button class="btn sec" id="lrcFile">Load from downloads/*.lrc…</button>
+      </div>
+      <p class="hint">Tests the parser, romanizer and ASS compiler end-to-end with the LRC's own timestamps. The result loads into the Preview tab.</p>
+      <div id="lrcMsg" class="hint"></div>
+    </div>
+  </div>
+</section>
+
+<!-- TESTS -->
+<section id="tests">
+  <div class="card">
+    <h2>Regression tests (pytest, offline)</h2>
+    <div class="row"><button class="btn" id="tRun">▶ Run tests</button><span id="tStatus" class="pill">idle</span></div>
+    <pre class="log" id="tLog" style="margin-top:12px">Not run yet.</pre>
+  </div>
+</section>
+
+</main>
+<script src="/vendor/jassub/jassub.umd.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const fmt=t=>{t=Math.max(0,t);const m=Math.floor(t/60);return m+":"+(t-m*60).toFixed(2).padStart(5,"0")};
+const api=async(p,b)=>{const r=await fetch(p,b===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});return r.json()};
+const esc=s=>s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+/* tabs */
+function tab(n){document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.tab===n));
+  document.querySelectorAll("main>section").forEach(s=>s.classList.toggle("on",s.id===n));}
+$("#nav").onclick=e=>{if(e.target.dataset.tab)tab(e.target.dataset.tab)};
+
+/* ---------- ASS parsing ---------- */
+const parseT=s=>{const m=s.match(/(\d+):(\d+):(\d+)\.(\d+)/);return +m[1]*3600+ +m[2]*60+ +m[3]+ +m[4]/100};
+function parseASS(text){
+  const ev=[];
+  for(const ln of text.replace(/^﻿/,"").split(/\r?\n/)){
+    if(!ln.startsWith("Dialogue:"))continue;
+    const p=ln.slice(9).trim().split(",");
+    const body=p.slice(9).join(",");
+    const segs=[];let t=0,m,re=/\{([^}]*)\}([^{]*)/g,pending=0;
+    const lead=body.match(/^[^{]+/);if(lead)segs.push({off:0,dur:0,text:lead[0],kind:"k"});
+    while((m=re.exec(body))){
+      const tg=m[1].match(/\\(kf|ko|k|K)(\d+)/);
+      if(tg){const d=+tg[2]/100;segs.push({off:t,dur:d,text:m[2],kind:tg[1]==="k"?"k":"kf"});t+=d;}
+      else if(m[2])segs.push({off:t,dur:0,text:m[2],kind:"k"});
+    }
+    const start=parseT(p[1]),end=parseT(p[2]);
+    const firstText=segs.find(s=>s.text.trim());
+    // sung span: skips the lead-in (empty \k before the first syllable) that KM lines start with
+    const sungStart=start+(firstText?firstText.off:0),sungEnd=Math.min(end,start+t);
+    ev.push({start,end,sungStart,sungEnd,segs,kdur:t,plain:segs.map(s=>s.text).join("").trim()});
+  }
+  return ev;
+}
+
+/* ---------- player ---------- */
+const P={ev:[],text:"",name:"",offset:0,playing:false,t:0,last:0,dur:60,hasMedia:false};
+const vid=$("#vid");
+function loadASS(text,name){
+  P.text=text;P.name=name;P.ev=parseASS(text);
+  P.dur=Math.max(10,...P.ev.map(e=>e.end))+2;
+  buildTimeline();seekTo(0);setStyleBadge();
+  if(J.inst)J.inst.setTrack(text);else attachSubs();
+}
+function setStyleBadge(){
+  const km=/^Style:\s*Sample KM \[Up\],/m.test(P.text);
+  const b=$("#styleBadge");b.className="badge "+(km?"ok":"old");
+  b.innerHTML=km?'<b>✓ Karaoke Mugen style</b> <span class="sw"><span style="color:#ff8a00">kara</span><span style="color:#fff">oke</span></span> top of screen, white → orange, 0.9 s lead-in with fade'
+                :'<b>Legacy style</b> — this file was made before the Karaoke Mugen restyle; regenerate it to get the kara.moe look';
+}
+
+/* ---------- libass (JASSUB) ---------- */
+const J={inst:null,mode:null};
+const JASSUB_OPTS={workerUrl:"/vendor/jassub/jassub-worker.js",wasmUrl:"/vendor/jassub/jassub-worker.wasm",
+  availableFonts:{"liberation sans":"/vendor/jassub/default.woff2",arial:"/font/arial.ttf","arial bold":"/font/arial-bold.ttf"},
+  fallbackFont:"liberation sans"};
+function detachSubs(){if(J.inst){try{J.inst.destroy()}catch(e){}J.inst=null;J.mode=null}}
+/* With media, JASSUB follows the <video> itself; without, it draws on #subCanvas driven by our clock. */
+function attachSubs(){
+  if(!P.text)return;
+  const mode=P.hasMedia?"video":"canvas";
+  if(J.inst&&J.mode===mode){J.inst.setTrack(P.text);applyOffset();return}
+  detachSubs();
+  const cv=$("#subCanvas");cv.style.display=mode==="canvas"?"":"none";
+  J.inst=new JASSUB({...JASSUB_OPTS,subContent:P.text,...(mode==="video"?{video:vid}:{canvas:cv})});
+  J.mode=mode;
+  if(mode==="canvas")sizeCanvas();
+  applyOffset();
+}
+function sizeCanvas(){
+  if(J.mode!=="canvas")return;
+  const cv=$("#subCanvas"),r=cv.getBoundingClientRect(),dpr=devicePixelRatio||1;
+  // canvas mode has no <video>; JASSUB 1.8.8 then reads _videoWidth/_videoHeight, so give it a 16:9 "video"
+  J.inst._videoWidth=1280;J.inst._videoHeight=720;
+  J.inst.resize(Math.round(r.width*dpr),Math.round(r.height*dpr));
+  J.inst.setCurrentTime(!P.playing,P.t-P.offset,+$("#rate").value);
+}
+new ResizeObserver(()=>sizeCanvas()).observe($("#stage"));
+function applyOffset(){
+  if(!J.inst)return;
+  if(J.mode==="video"){J.inst.timeOffset=-P.offset;J.inst.setCurrentTime(vid.paused,vid.currentTime-P.offset,vid.playbackRate)}
+  else J.inst.setCurrentTime(!P.playing,P.t-P.offset,+$("#rate").value);
+}
+function buildTimeline(){
+  const tl=$("#tl");tl.innerHTML="";let flags=0;
+  P.ev.forEach((e,i)=>{
+    const f=[];
+    if(i&&e.sungStart<P.ev[i-1].sungEnd-0.05)f.push("sung over previous line");
+    if(e.sungEnd-e.sungStart<0.6)f.push("very short");
+    const gaps=e.segs.filter(s=>s.kind==="k"&&!s.text&&s.dur>3).length;if(gaps)f.push("long gap");
+    if(!e.plain)f.push("empty");
+    flags+=f.length?1:0;
+    const d=document.createElement("div");d.dataset.i=i;
+    d.innerHTML=`<span class="mono t">${fmt(e.sungStart)}</span><span class="mono t t2">${(e.sungEnd-e.sungStart).toFixed(1)}s</span><span>${esc(e.plain||"(empty)")}</span><span class="flag">${f.join(", ")}</span>`;
+    d.onclick=()=>seekTo(Math.max(0,e.start+P.offset));
+    tl.appendChild(d);
+  });
+  $("#lineStats").textContent=`— ${P.ev.length} lines, ${flags} flagged`;
+}
+function render(){
+  const t=P.t-P.offset;
+  let cur=-1;P.ev.forEach((e,i)=>{if(t>=e.start&&t<e.end)cur=i});
+  if(cur!==P.cur){P.cur=cur;
+    document.querySelectorAll("#tl div").forEach(d=>d.classList.toggle("cur",+d.dataset.i===cur));
+    if(cur>=0&&P.playing){const el=document.querySelector(`#tl div[data-i="${cur}"]`);if(el)el.scrollIntoView({block:"nearest"})}}
+  $("#clock").textContent=fmt(P.t)+" / "+fmt(P.dur);
+  $("#seek").max=P.dur;$("#seek").value=P.t;
+}
+function now(){return P.hasMedia?vid.currentTime:P.t}
+function loop(ts){
+  if(P.playing){
+    if(P.hasMedia)P.t=vid.currentTime;
+    else{P.t+=(ts-P.last)/1000*(+$("#rate").value);if(P.t>=P.dur){P.t=P.dur;setPlay(false)}
+      if(J.mode==="canvas")J.inst.setCurrentTime(false,P.t-P.offset,+$("#rate").value)}
+  }
+  P.last=ts;render();requestAnimationFrame(loop);
+}
+function seekTo(t){P.t=Math.max(0,t);if(P.hasMedia)vid.currentTime=P.t;else if(J.mode==="canvas")J.inst.setCurrentTime(!P.playing,P.t-P.offset,+$("#rate").value);render()}
+function setPlay(on){P.playing=on;$("#play").textContent=on?"⏸ Pause":"▶ Play";
+  if(!P.hasMedia){if(J.mode==="canvas")applyOffset();return}
+  if(on)vid.play().catch(err=>{if(err.name==="AbortError")return;setPlay(false);showNotice("The browser refused to play this file: "+err.message,true)});
+  else vid.pause();}
+function showNotice(msg,canConvert){$("#noticeMsg").textContent=msg;$("#convert").hidden=!canConvert;$("#convLog").textContent="";$("#notice").hidden=false}
+function hideNotice(){$("#notice").hidden=true}
+const CODEC_MIME={av1:'video/mp4; codecs="av01.0.08M.08"',vp9:'video/mp4; codecs="vp09.00.10.08"',hevc:'video/mp4; codecs="hvc1.1.6.L93.B0"',h264:'video/mp4; codecs="avc1.640028"'};
+vid.onerror=()=>{if(P.hasMedia&&vid.getAttribute("src"))showNotice("This browser can't decode this file"+(P.codec?` (video codec: ${P.codec.toUpperCase()})`:"")+".",true)};
+vid.onloadeddata=()=>{if(P.codec&&vid.videoWidth===0)showNotice(`Audio loaded but the ${P.codec.toUpperCase()} video can't be decoded by this browser.`,true)};
+$("#convert").onclick=async()=>{
+  const [kind,...rest]=$("#mediaSel").value.split("/");const name=rest.join("/");
+  $("#convert").disabled=true;$("#convLog").textContent="Starting ffmpeg…";
+  const r=await api("/api/transcode",{kind,name});
+  if(r.error){$("#convLog").textContent="⚠ "+r.error;$("#convert").disabled=false;return}
+  const t=setInterval(async()=>{
+    const s=await api(`/api/job/${r.id}?since=0`);
+    if(s.log.length)$("#convLog").textContent=s.log[s.log.length-1];
+    if(s.status==="running")return;
+    clearInterval(t);$("#convert").disabled=false;
+    if(s.status!=="done"||!s.result){$("#convLog").textContent="⚠ Conversion failed: "+s.log.slice(-1)[0];return}
+    await refresh(true);$("#mediaSel").value=s.result.media.kind+"/"+s.result.media.name;$("#mediaSel").onchange();
+  },800);
+};
+$("#play").onclick=()=>setPlay(!P.playing);
+$("#seek").oninput=e=>seekTo(+e.target.value);
+$("#rate").onchange=e=>{vid.playbackRate=+e.target.value;if(J.mode==="canvas")applyOffset()};
+function setOffset(v){P.offset=Math.round(v*100)/100;$("#offset").value=P.offset;$("#offVal").textContent=(P.offset>=0?"+":"")+P.offset.toFixed(2)+"s";applyOffset()}
+$("#offset").oninput=e=>setOffset(+e.target.value);
+$("#nudgeM").onclick=()=>setOffset(P.offset-.1);
+$("#nudgeP").onclick=()=>setOffset(P.offset+.1);
+document.addEventListener("keydown",e=>{
+  if(!$("#preview").classList.contains("on")||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
+  if(e.code==="Space"){e.preventDefault();setPlay(!P.playing)}
+  if(e.code==="ArrowLeft")seekTo(P.t-5);if(e.code==="ArrowRight")seekTo(P.t+5);
+});
+$("#saveOff").onclick=()=>{
+  const sh=s=>{let t=Math.max(0,parseT(s)+P.offset),cs=Math.round(t*100),c=cs%100,x=Math.floor(cs/100);
+    return `${Math.floor(x/3600)}:${String(Math.floor(x/60)%60).padStart(2,"0")}:${String(x%60).padStart(2,"0")}.${String(c).padStart(2,"0")}`};
+  const out=P.text.replace(/^(Dialogue:\s*\d+,)([^,]+),([^,]+),/gm,(_,a,s,e)=>a+sh(s)+","+sh(e)+",");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["﻿"+out.replace(/^﻿/,"")],{type:"text/plain"}));
+  a.download=(P.name||"subs").replace(/\.ass$/,"")+" (shifted).ass";a.click();
+};
+vid.onended=()=>setPlay(false);
+vid.onloadedmetadata=()=>{if(isFinite(vid.duration))P.dur=Math.max(P.dur,vid.duration)};
+
+/* file lists */
+let FILES={};
+async function refresh(keepSel){
+  FILES=await api("/api/files");
+  const a=$("#assSel"),m=$("#mediaSel"),pa=a.value,pm=m.value;
+  a.innerHTML='<option value="">— choose a .ass —</option>';
+  FILES.output.filter(f=>f.name.endsWith(".ass")).sort((x,y)=>y.mtime-x.mtime).forEach(f=>a.add(new Option(f.name,"output/"+f.name)));
+  m.innerHTML='<option value="">(none – use built-in clock)</option>';
+  const ext=/\.(mp4|mkv|webm|mov|m4a|mp3|wav|flac|ogg|opus)$/i;
+  for(const k of ["downloads","uploads"])FILES[k].filter(f=>ext.test(f.name)).forEach(f=>m.add(new Option(`${f.name} (${k})`,k+"/"+f.name)));
+  if(keepSel){a.value=pa;m.value=pm}
+}
+$("#refresh").onclick=()=>refresh(true);
+$("#assSel").onchange=async e=>{
+  if(!e.target.value)return;
+  const r=await fetch("/file/"+e.target.value);loadASS(await r.text(),e.target.value.split("/")[1]);
+  const guess=guessMedia(e.target.value.split("/")[1]);
+  if(guess!==$("#mediaSel").value){$("#mediaSel").value=guess;$("#mediaSel").onchange()}
+};
+/* pair a subtitle with its media: saved pairing → same name → closest download made just before it */
+function guessMedia(assName){
+  const v=guessMedia0(assName);if(!v)return v;
+  const conv="uploads/"+v.split("/").pop().replace(/\.[^.]+$/,"")+".h264.mp4";   // prefer a converted copy
+  return [...$("#mediaSel").options].some(o=>o.value===conv)?conv:v;
+}
+function guessMedia0(assName){
+  const opts=[...$("#mediaSel").options].map(o=>o.value).filter(Boolean);
+  const mapped=(FILES.media_map||{})[assName];
+  if(mapped&&opts.includes(mapped))return mapped;
+  const stem=assName.replace(/\.ass$/,"").toLowerCase();
+  const byName=opts.find(v=>v.toLowerCase().includes(stem));if(byName)return byName;
+  const a=FILES.output.find(f=>f.name===assName);if(!a)return "";
+  let best="",bestD=Infinity;
+  for(const k of ["downloads","uploads"])for(const f of FILES[k]){
+    const v=k+"/"+f.name,d=a.mtime-f.mtime;
+    if(opts.includes(v)&&d>=-5&&d<3*3600&&d<bestD){best=v;bestD=d}
+  }
+  return best;
+}
+$("#mediaSel").onchange=async()=>{
+  setPlay(false);hideNotice();P.codec=null;const v=$("#mediaSel").value;
+  if(!v){P.hasMedia=false;vid.removeAttribute("src");vid.load();vid.style.display="none";attachSubs();return}
+  vid.style.display="";P.hasMedia=true;P.t=0;
+  const pr=await api("/api/probe/"+v).catch(()=>({}));
+  P.codec=pr.video||null;
+  const mime=CODEC_MIME[P.codec];
+  if(mime&&!vid.canPlayType(mime)){vid.removeAttribute("src");vid.load();P.hasMedia=false;vid.style.display="none";attachSubs();
+    showNotice(`This browser can't play ${P.codec.toUpperCase()} video (YouTube often serves AV1).`,true);return}
+  vid.src="/file/"+v;vid.playbackRate=+$("#rate").value;attachSubs();
+};
+$("#mediaSel").onchange();
+
+/* ---------- generate ---------- */
+let job=null,poll=null,lastResult=null;
+$("#gFile").onchange=()=>{};
+$("#gRun").onclick=async()=>{
+  let source=$("#gUrl").value.trim();
+  const f=$("#gFile").files[0];
+  $("#gRun").disabled=true;$("#gOpen").style.display="none";
+  if(!source&&f){
+    $("#gLog").textContent=`Uploading ${f.name}…`;
+    const r=await (await fetch("/api/upload?name="+encodeURIComponent(f.name),{method:"POST",body:f})).json();
+    source=r.name;
+  }
+  if(!source){$("#gLog").textContent="Enter a URL or choose a file.";$("#gRun").disabled=false;return}
+  const r=await api("/api/run",{source,artist:$("#gArtist").value.trim(),title:$("#gTitle").value.trim(),
+    lyrics:$("#gLyrics").value,remove_vocals:$("#gVocals").checked});
+  if(r.error){$("#gLog").textContent="⚠ "+r.error;$("#gRun").disabled=false;return}
+  job=r.id;$("#gLog").textContent="";$("#gCancel").disabled=false;let since=0;
+  poll=setInterval(async()=>{
+    const s=await api(`/api/job/${job}?since=${since}`);
+    const log=$("#gLog");
+    if(s.log.length){const stick=log.scrollTop+log.clientHeight>=log.scrollHeight-20;log.textContent+=s.log.join("\n")+"\n";if(stick)log.scrollTop=log.scrollHeight}
+    since=s.next;const st=$("#gStatus");st.textContent=s.status;st.className="pill "+s.status;
+    if(s.status!=="running"){
+      clearInterval(poll);$("#gRun").disabled=false;$("#gCancel").disabled=true;lastResult=s.result;
+      if(s.status==="done"&&s.result&&s.result.ass)$("#gOpen").style.display="";
+    }
+  },700);
+};
+$("#gCancel").onclick=()=>{if(job)api("/api/cancel/"+job,{})};
+$("#gOpen").onclick=async()=>{
+  await refresh();
+  if(lastResult.ass){$("#assSel").value="output/"+lastResult.ass.name}
+  const m=lastResult.media;
+  await $("#assSel").onchange({target:$("#assSel")});
+  if(m){$("#mediaSel").value=m.kind+"/"+m.name;$("#mediaSel").onchange()}
+  tab("preview");
+};
+
+/* ---------- lab ---------- */
+$("#labGo").onclick=async()=>{
+  const r=await api("/api/romanize",{text:$("#labText").value});
+  if(r.error){$("#labOut").textContent=r.error;return}
+  $("#labOut").innerHTML=r.lines.map(l=>`<div class="lab-line"><div>${esc(l.text)}</div><div class="rom">${esc(l.romaji)}</div>
+    <div class="morae">${l.morae.map(m=>`<span class="${m.is_token_end?"end ":""}${m.is_sokuon?"sok":""}">${esc(m.mora)}<small>${esc(m.rom||"∅")}</small></span>`).join("")}</div></div>`).join("");
+};
+$("#lrcGo").onclick=async()=>{
+  const r=await api("/api/lrc-to-ass",{lrc:$("#lrcText").value,title:"LRC preview"});
+  if(r.error){$("#lrcMsg").textContent="⚠ "+r.error;return}
+  $("#lrcMsg").textContent=`Compiled ${r.lines} lines → opened in Preview.`;
+  loadASS(r.ass,"LRC preview.ass");$("#assSel").value="";tab("preview");
+};
+$("#lrcFile").onclick=async()=>{
+  await refresh(true);const l=FILES.downloads.filter(f=>f.name.endsWith(".lrc"));
+  if(!l.length){$("#lrcMsg").textContent="No .lrc files in downloads/. Paste LRC text instead.";return}
+  const r=await fetch("/file/downloads/"+l[0].name);$("#lrcText").value=await r.text();
+  $("#lrcMsg").textContent="Loaded "+l[0].name;
+};
+$("#labGo").click();
+
+/* ---------- tests ---------- */
+$("#tRun").onclick=async()=>{
+  $("#tRun").disabled=true;$("#tStatus").textContent="running";$("#tStatus").className="pill running";$("#tLog").textContent="Running…";
+  const r=await api("/api/tests",{});
+  $("#tLog").textContent=r.output||r.error;$("#tStatus").textContent=r.ok?"passed":"failed";$("#tStatus").className="pill "+(r.ok?"done":"failed");
+  $("#tRun").disabled=false;
+};
+
+refresh().then(()=>{const f=[...$("#assSel").options][1];if(f){$("#assSel").value=f.value;$("#assSel").onchange({target:$("#assSel")})}});
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
