@@ -11,7 +11,7 @@ import yt_dlp
 from aligner import force_align_japanese, isolate_vocals
 from ass_compiler import compile_ass
 from fast_lyrics import fetch_and_parse_lyrics, parse_lrc_text
-from models import LyricLine, SongBundle
+from models import LyricLine
 
 logging.basicConfig(
     level=logging.INFO,
@@ -138,31 +138,12 @@ def _safe_filename(s: str) -> str:
     return s.rstrip(". ")
 
 
-def download_audio_yt_dlp(source: str, output_dir: str = "./downloads") -> str:
-    """Download audio track from a URL using yt-dlp or return local path."""
-    if not is_url(source):
-        if not os.path.exists(source):
-            raise FileNotFoundError(f"Local audio file does not exist: {source}")
-        return os.path.abspath(source)
-
-    os.makedirs(output_dir, exist_ok=True)
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": os.path.join(output_dir, "%(id)s.%(ext)s"),
-        "noplaylist": True,
-        "quiet": False,
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(source, download=True)
-        return ydl.prepare_filename(info)
-
-
-def download_video_yt_dlp(source: str, output_dir: str = "./downloads") -> str:
-    """Download video from a URL using yt-dlp or return local path."""
+def download_video_yt_dlp(source: str, output_dir: str = "./downloads") -> tuple[str, dict]:
+    """Download video from a URL using yt-dlp, returning (path, info); local files return (abspath, {})."""
     if not is_url(source):
         if not os.path.exists(source):
             raise FileNotFoundError(f"Local video file does not exist: {source}")
-        return os.path.abspath(source)
+        return os.path.abspath(source), {}
 
     os.makedirs(output_dir, exist_ok=True)
     ydl_opts = {
@@ -173,7 +154,7 @@ def download_video_yt_dlp(source: str, output_dir: str = "./downloads") -> str:
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(source, download=True)
-        return ydl.prepare_filename(info)
+        return ydl.prepare_filename(info), info
 
 
 def main() -> None:
@@ -213,22 +194,22 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if not is_url(args.source) and (not args.artist or not args.title):
+        parser.error("--artist and --title are required for local files")
+
+    logger.info("Preparing media from source...")
+    media_path, info = download_video_yt_dlp(args.source, output_dir="./downloads")
+
+    args.artist = args.artist or info.get("artist") or info.get("uploader")
+    args.title = args.title or info.get("track") or info.get("title")
     if not args.artist or not args.title:
-        if is_url(args.source):
-            with yt_dlp.YoutubeDL({"quiet": True, "noplaylist": True}) as ydl:
-                info = ydl.extract_info(args.source, download=False)
-            args.artist = args.artist or info.get("artist") or info.get("uploader")
-            args.title = args.title or info.get("track") or info.get("title")
-        if not args.artist or not args.title:
-            parser.error("--artist and --title are required for local files (or when they cannot be read from the URL)")
+        parser.error("--artist and --title could not be read from the URL metadata; pass them explicitly")
 
     logger.info(f"Processing '{args.artist} - {args.title}' from source: {args.source}")
 
     lines: list[LyricLine] | None = None
     vocal_stem_path: str | None = None
     inst_stem_path: str | None = None
-    video_path: str = args.source
-    audio_path: str = args.source
 
     # Step 1: Obtain lyrics text
     raw_lyrics_text = None
@@ -265,29 +246,13 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # Step 2: Acquire video and pristine audio for synchronization
-    logger.info("Step 2: Preparing media from source for synchronization...")
-    if is_url(args.source):
-        logger.info("Downloading clean audio and video tracks for exact sync...")
-        audio_path = download_audio_yt_dlp(args.source, output_dir="./downloads")
-        video_path = download_video_yt_dlp(args.source, output_dir="./downloads")
-    else:
-        video_path = os.path.abspath(args.source)
-        audio_path = video_path
-        base, _ = os.path.splitext(video_path)
-        if os.path.exists(base + ".webm"):
-            audio_path = base + ".webm"
-            logger.info(f"Using corresponding Opus audio track for exact acoustic sync: {audio_path}")
-
     if args.remove_vocals:
         logger.info("Step 2b: Preparing instrumental stem for vocal removal...")
-        logger.info(f"Running stem isolation on {audio_path}...")
-        vocal_stem_path, inst_stem_path = isolate_vocals(audio_path, output_dir="./stems")
+        logger.info(f"Running stem isolation on {media_path}...")
+        vocal_stem_path, inst_stem_path = isolate_vocals(media_path, output_dir="./stems")
         align_target = vocal_stem_path
-        play_audio = inst_stem_path
     else:
-        align_target = audio_path
-        play_audio = audio_path
+        align_target = media_path
 
     logger.info("Step 2c: Running forced alignment with Whisper on media for exact syllable sync...")
     try:
@@ -309,16 +274,6 @@ def main() -> None:
     logger.info(f"Step 3: Compiling ASS subtitle file to: {ass_path}")
     compile_ass(lines, title=args.title, output_path=ass_path)
     logger.info("ASS compilation complete.")
-
-    bundle = SongBundle(
-        title=args.title,
-        artist=args.artist,
-        video_path=video_path,
-        audio_path=audio_path,
-        vocal_stem_path=vocal_stem_path,
-        inst_stem_path=inst_stem_path,
-        lines=lines,
-    )
 
     mpv_bin = _find_mpv_binary()
     norm_ass_path = os.path.abspath(ass_path).replace("\\", "/")
@@ -344,10 +299,11 @@ def main() -> None:
         f"--sub-file={norm_ass_path}",
     ]
 
-    norm_play_audio = os.path.abspath(play_audio).replace("\\", "/")
-    mpv_cmd.append(f"--audio-file={norm_play_audio}")
+    if inst_stem_path:
+        norm_play_audio = os.path.abspath(inst_stem_path).replace("\\", "/")
+        mpv_cmd.append(f"--audio-file={norm_play_audio}")
 
-    norm_video_path = os.path.abspath(bundle.video_path).replace("\\", "/")
+    norm_video_path = os.path.abspath(media_path).replace("\\", "/")
     mpv_cmd.append(norm_video_path)
 
     logger.info(f"Executing: {' '.join(mpv_cmd)}")
