@@ -132,6 +132,12 @@ def _find_mpv_binary() -> str:
     return "mpv.exe"
 
 
+def _safe_filename(s: str) -> str:
+    """Replace characters that are invalid in file names and strip trailing dots/spaces."""
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", s)
+    return s.rstrip(". ")
+
+
 def download_audio_yt_dlp(source: str, output_dir: str = "./downloads") -> str:
     """Download audio track from a URL using yt-dlp or return local path."""
     if not is_url(source):
@@ -176,19 +182,18 @@ def main() -> None:
         description="Generate Karaoke Mugen-style word-synced Romaji .ass subtitles from YouTube URLs or local audio.",
     )
     parser.add_argument(
-        "--source",
-        required=True,
+        "source",
         help="YouTube URL or local file path to audio/video",
     )
     parser.add_argument(
         "--artist",
-        required=True,
-        help="Artist name, e.g., 'Sakanaction'",
+        default=None,
+        help="Artist name, e.g., 'Sakanaction' (taken from the URL metadata if omitted)",
     )
     parser.add_argument(
         "--title",
-        required=True,
-        help="Song title, e.g., 'Shin Takarajima'",
+        default=None,
+        help="Song title, e.g., 'Shin Takarajima' (taken from the URL metadata if omitted)",
     )
     parser.add_argument(
         "--lyrics-file",
@@ -207,6 +212,15 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if not args.artist or not args.title:
+        if is_url(args.source):
+            with yt_dlp.YoutubeDL({"quiet": True, "noplaylist": True}) as ydl:
+                info = ydl.extract_info(args.source, download=False)
+            args.artist = args.artist or info.get("artist") or info.get("uploader")
+            args.title = args.title or info.get("track") or info.get("title")
+        if not args.artist or not args.title:
+            parser.error("--artist and --title are required for local files (or when they cannot be read from the URL)")
 
     logger.info(f"Processing '{args.artist} - {args.title}' from source: {args.source}")
 
@@ -291,7 +305,7 @@ def main() -> None:
     # Step 3: Compile ASS subtitles
     output_dir = "./output"
     os.makedirs(output_dir, exist_ok=True)
-    ass_path = os.path.join(output_dir, f"{args.artist} - {args.title}.ass")
+    ass_path = os.path.join(output_dir, _safe_filename(f"{args.artist} - {args.title}") + ".ass")
     logger.info(f"Step 3: Compiling ASS subtitle file to: {ass_path}")
     compile_ass(lines, title=args.title, output_path=ass_path)
     logger.info("ASS compilation complete.")
