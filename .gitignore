@@ -23,9 +23,6 @@ downloads/*.ogg
 # Retain guide LRCs if downloaded
 !downloads/*.lrc
 
-# Windows Task Scheduler temporary scripts
-run_mpv.ps1
-
 # IDE and OS
 .DS_Store
 Thumbs.db

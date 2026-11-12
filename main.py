@@ -26,110 +26,14 @@ def is_url(source: str) -> bool:
     return source.startswith(("http://", "https://", "ftp://", "www."))
 
 
-def _is_sandboxed_desktop() -> bool:
-    """Check if the current process is running in an isolated/sandboxed Windows desktop."""
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        dt = user32.GetThreadDesktop(ctypes.windll.kernel32.GetCurrentThreadId())
-        buf = ctypes.create_unicode_buffer(256)
-        user32.GetUserObjectInformationW(dt, 2, buf, 256, None)
-        return buf.value.lower() != "default"
-    except Exception:
-        return False
-
-
 def _launch_mpv(mpv_cmd: list[str]) -> None:
-    """Launch mpv GUI player, routing to the user's interactive desktop if sandboxed."""
-    if sys.platform == "win32" and _is_sandboxed_desktop():
-        logger.info("Routing mpv to user's interactive desktop...")
-        task_name = "KMugenMpvPlayer"
-        ps_path = os.path.abspath("./run_mpv.ps1")
-
-        quoted_args = []
-        for arg in mpv_cmd:
-            escaped = arg.replace("`", "``").replace('"', '`"')
-            quoted_args.append(f'"{escaped}"')
-
-        ps_content = f"& {quoted_args[0]} {' '.join(quoted_args[1:])}\n"
-        with open(ps_path, "w", encoding="utf-8") as f:
-            f.write(ps_content)
-
-        sch_tr = f'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{ps_path}"'
-        create_cmd = [
-            "schtasks", "/create",
-            "/tn", task_name,
-            "/tr", sch_tr,
-            "/sc", "once",
-            "/st", "23:59",
-            "/it",
-            "/f"
-        ]
-        subprocess.run(create_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            subprocess.run(["schtasks", "/run", "/tn", task_name], check=True, stdout=subprocess.DEVNULL)
-            import time
-            # Wait up to 15 seconds for mpv.exe to start appearing in tasklist
-            for _ in range(15):
-                time.sleep(1)
-                res = subprocess.run('tasklist /fi "imagename eq mpv.exe" /nh', shell=True, capture_output=True, text=True)
-                if "mpv.exe" in res.stdout:
-                    break
-            # Wait for mpv.exe to finish playback before cleanup
-            while True:
-                time.sleep(1)
-                res = subprocess.run('tasklist /fi "imagename eq mpv.exe" /nh', shell=True, capture_output=True, text=True)
-                if "mpv.exe" not in res.stdout:
-                    break
-        finally:
-            subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if os.path.exists(ps_path):
-                try:
-                    os.remove(ps_path)
-                except Exception:
-                    pass
-    else:
-        startupinfo = None
-        if sys.platform == "win32":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = 1
-        subprocess.run(mpv_cmd, startupinfo=startupinfo, check=True)
+    """Launch the mpv player and wait for it to exit."""
+    subprocess.run(mpv_cmd, check=True)
 
 
-def _find_mpv_binary() -> str:
-    """Find mpv.exe executable, explicitly avoiding console wrapper mpv.com on Windows."""
-    known_paths = [
-        r"C:\ProgramData\chocolatey\lib\mpvio.install\tools\mpv.exe",
-        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\mpv-player.mpv-CI.MSVC_Microsoft.Winget.Source_8wekyb3d8bbwe\mpv.exe"),
-        os.path.expandvars(r"%ProgramFiles%\mpv\mpv.exe"),
-    ]
-    for p in known_paths:
-        if os.path.isfile(p):
-            return p
-
-    if sys.platform == "win32":
-        path_dirs = os.environ.get("PATH", "").split(os.pathsep)
-        for d in path_dirs:
-            candidate = os.path.join(d, "mpv.exe")
-            if os.path.isfile(candidate):
-                return candidate
-
-    exe = shutil.which("mpv.exe")
-    if exe and not exe.lower().endswith(".com"):
-        return exe
-
-    candidate = shutil.which("mpv")
-    if candidate:
-        if candidate.lower().endswith(".com"):
-            exe_sibling = candidate[:-4] + ".exe"
-            if os.path.isfile(exe_sibling):
-                return exe_sibling
-        return candidate
-
-    return "mpv.exe"
+def _find_mpv_binary() -> str | None:
+    """Return the path to mpv found on PATH, or None."""
+    return shutil.which("mpv")
 
 
 def _safe_filename(s: str) -> str:
@@ -281,6 +185,11 @@ def main() -> None:
     # Step 4: Launch mpv
     if args.no_play:
         logger.info("Step 4: --no-play flag is set. Skipping mpv launch. Generation complete!")
+        logger.info(f"Generated ASS subtitle file: {ass_path}")
+        return
+
+    if mpv_bin is None:
+        logger.warning("mpv was not found on PATH. Skipping playback.")
         logger.info(f"Generated ASS subtitle file: {ass_path}")
         return
 
