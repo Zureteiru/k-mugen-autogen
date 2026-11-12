@@ -6,16 +6,6 @@ import shutil
 import subprocess
 import sys
 
-
-def _ensure_venv() -> None:
-    """If running outside the local .venv with PyTorch/Whisper installed, auto-respawn inside it."""
-    venv_py = os.path.abspath(os.path.join(os.path.dirname(__file__), ".venv", "Scripts", "python.exe"))
-    if os.path.exists(venv_py) and os.path.abspath(sys.executable).lower() != venv_py.lower():
-        sys.exit(subprocess.call([venv_py] + sys.argv))
-
-
-_ensure_venv()
-
 import yt_dlp
 
 from aligner import force_align_japanese, isolate_vocals
@@ -142,64 +132,6 @@ def _find_mpv_binary() -> str:
     return "mpv.exe"
 
 
-def _find_yt_dlp() -> str | None:
-    """Find yt-dlp executable across venv, system Python, roaming, and PATH."""
-    project_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        shutil.which("yt-dlp"),
-        shutil.which("yt-dlp.exe"),
-        os.path.join(project_dir, ".venv", "Scripts", "yt-dlp.exe"),
-        os.path.join(sys.prefix, "Scripts", "yt-dlp.exe"),
-        os.path.expandvars(r"%APPDATA%\Python\Python315\Scripts\yt-dlp.exe"),
-        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python311\Scripts\yt-dlp.exe"),
-        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python312\Scripts\yt-dlp.exe"),
-    ]
-    for c in candidates:
-        if c and os.path.isfile(c):
-            return os.path.abspath(c)
-    return None
-
-
-def _refresh_windows_path() -> None:
-    """Ensure user/system PATH, python scripts, and known tool locations are loaded in the current process."""
-    paths: list[str] = [
-        os.path.join(sys.prefix, "Scripts"),
-        os.path.dirname(sys.executable),
-    ]
-    if sys.platform == "win32":
-        try:
-            import winreg
-
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
-                try:
-                    user_path, _ = winreg.QueryValueEx(key, "Path")
-                    paths.append(user_path)
-                except FileNotFoundError:
-                    pass
-            with winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-            ) as key:
-                try:
-                    sys_path, _ = winreg.QueryValueEx(key, "Path")
-                    paths.append(sys_path)
-                except FileNotFoundError:
-                    pass
-
-            extra_paths = [
-                r"C:\ProgramData\chocolatey\lib\mpvio.install\tools",
-                r"C:\ProgramData\chocolatey\bin",
-                os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links"),
-                os.path.expandvars(r"%APPDATA%\Python\Python315\Scripts"),
-            ]
-            paths.extend(extra_paths)
-        except Exception:
-            pass
-
-    all_paths = paths + [os.environ.get("PATH", "")]
-    os.environ["PATH"] = os.pathsep.join(p for p in all_paths if p)
-
-
 def download_audio_yt_dlp(source: str, output_dir: str = "./downloads") -> str:
     """Download audio track from a URL using yt-dlp or return local path."""
     if not is_url(source):
@@ -239,8 +171,6 @@ def download_video_yt_dlp(source: str, output_dir: str = "./downloads") -> str:
 
 
 def main() -> None:
-    _refresh_windows_path()
-
     parser = argparse.ArgumentParser(
         prog="k-mugen-autogen",
         description="Generate Karaoke Mugen-style word-synced Romaji .ass subtitles from YouTube URLs or local audio.",
@@ -375,8 +305,6 @@ def main() -> None:
         inst_stem_path=inst_stem_path,
         lines=lines,
     )
-
-    import shutil
 
     mpv_bin = _find_mpv_binary()
     norm_ass_path = os.path.abspath(ass_path).replace("\\", "/")

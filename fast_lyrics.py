@@ -5,8 +5,6 @@ import syncedlyrics
 from japanese_utils import convert_tokens_to_morae, get_morae_for_text
 from models import LyricLine, MoraTiming
 
-_SMALL_KANA = set("ゃゅょぁぃぅぇぉゎャュョァィゥェォヮ")
-
 _KNOWN_ALIASES = {
     "sakanaction": "サカナクション",
     "shin takarajima": "新宝島",
@@ -62,18 +60,6 @@ def _is_credit_or_meta(text: str) -> bool:
         if raw.startswith(c) or f"{c}:" in raw or f"{c} :" in raw:
             return True
     return False
-
-
-def _tokenize_morae(text: str, k: pykakasi.kakasi | None = None) -> list[tuple[str, str]]:
-    """
-    Break a Japanese text line into individual Hiragana morae with Hepburn romaji.
-    Returns list of (hiragana_mora, hepburn_romaji).
-    """
-    morae_data = get_morae_for_text(text, k)
-    return [
-        (m["mora"], m["rom"] + (" " if m["is_token_end"] else ""))
-        for m in morae_data
-    ]
 
 
 def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
@@ -185,7 +171,7 @@ def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
         if _is_credit_or_meta(text):
             continue
 
-        morae_tokens = _tokenize_morae(text, k)
+        morae_tokens = get_morae_for_text(text, k)
         if not morae_tokens:
             continue
 
@@ -207,13 +193,13 @@ def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
         mora_duration = duration / mora_count
         mora_timings: list[MoraTiming] = []
 
-        for m_idx, (m_hira, m_rom) in enumerate(morae_tokens):
+        for m_idx, m in enumerate(morae_tokens):
             m_s = current_start + m_idx * mora_duration
             m_e = current_start + (m_idx + 1) * mora_duration
             mora_timings.append(
                 MoraTiming(
-                    hiragana=m_hira,
-                    romaji=m_rom,
+                    hiragana=m["mora"],
+                    romaji=m["rom"] + (" " if m["is_token_end"] else ""),
                     start_sec=round(m_s, 3),
                     end_sec=round(m_e, 3),
                 )
@@ -270,16 +256,3 @@ def parse_lrc_text(lrc_text: str, k: pykakasi.kakasi | None = None) -> list[Lyri
         k = get_kakasi()
     return _parse_lrc(lrc_text, k)
 
-
-if __name__ == "__main__":
-    lines = fetch_and_parse_lyrics("Sakanaction", "Shin Takarajima")
-    if lines:
-        for i, line in enumerate(lines[:3], 1):
-            print(f"--- Line {i} ---")
-            print(f"Original Text: {line.original_text}")
-            print(f"Timing: {line.start_sec:.2f}s -> {line.end_sec:.2f}s")
-            print(f"Morae ({len(line.morae)} total):")
-            for m in line.morae:
-                print(f"  [{m.start_sec:.2f} - {m.end_sec:.2f}] (cs={m.duration_cs}) {m.hiragana} -> {m.romaji}")
-    else:
-        print("No lyrics found.")

@@ -7,11 +7,6 @@ class MoraTiming:
     romaji: str
     start_sec: float
     end_sec: float
-    pre_gap_cs: int = 0
-
-    @property
-    def duration_cs(self) -> int:
-        return max(1, int(round((self.end_sec - self.start_sec) * 100)))
 
 
 @dataclass
@@ -20,7 +15,6 @@ class LyricLine:
     start_sec: float
     end_sec: float
     morae: list[MoraTiming]
-    translation: str | None = None
 
 
 @dataclass

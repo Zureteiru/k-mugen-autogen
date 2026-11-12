@@ -3,8 +3,6 @@ import pykakasi
 from japanese_utils import get_morae_for_text
 from models import LyricLine, MoraTiming
 
-_SMALL_KANA = set("ゃゅょぁぃぅぇぉゎャュョァィゥェォヮ")
-
 
 def _format_ass_time(seconds: float) -> str:
     """Format seconds into ASS timestamp format H:MM:SS.cs."""
@@ -19,57 +17,12 @@ def _format_ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def _apply_word_spaces(original_text: str, morae: list[MoraTiming]) -> list[str]:
-    """
-    Ensure spaces are cleanly inserted between words in the morae list
-    based on word boundaries in original_text.
-    """
-    words = original_text.split()
-    if len(words) <= 1 or not morae:
-        return [m.romaji for m in morae]
-
-    k = pykakasi.kakasi()
-    word_mora_counts: list[int] = []
-    for w in words:
-        conv = k.convert(w)
-        h = "".join(t.get("hira", "") for t in conv)
-        chars = [c for c in h if not c.isspace() and c not in "、。・！？…〜~\"'()[]{}"]
-        cnt = 0
-        i = 0
-        while i < len(chars):
-            if i + 1 < len(chars) and chars[i + 1] in _SMALL_KANA:
-                i += 2
-            else:
-                i += 1
-            cnt += 1
-        word_mora_counts.append(cnt)
-
-    if sum(word_mora_counts) == len(morae):
-        result = []
-        cur_idx = 0
-        for w_idx, count in enumerate(word_mora_counts):
-            for j in range(count):
-                m_rom = morae[cur_idx].romaji
-                if j == count - 1 and w_idx < len(word_mora_counts) - 1:
-                    if not m_rom.endswith(" "):
-                        m_rom = m_rom + " "
-                result.append(m_rom)
-                cur_idx += 1
-        return result
-
-    return [m.romaji for m in morae]
-
-
 def _build_romaji_payload(line: LyricLine, event_start_sec: float) -> str:
     """
     Assemble the Romaji karaoke payload string with continuous, drift-free timeline tracking.
     Every mora or word begins highlighting at its exact acoustic centisecond.
     """
-    has_spaces = any(" " in m.romaji for m in line.morae)
-    if has_spaces:
-        romaji_list = [m.romaji for m in line.morae]
-    else:
-        romaji_list = _apply_word_spaces(line.original_text, line.morae)
+    romaji_list = [m.romaji for m in line.morae]
 
     payload_parts: list[str] = []
     current_sec = event_start_sec
@@ -110,7 +63,6 @@ PlayResY: 1080
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Romaji,Arial Bold,68,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,2,2,10,10,85,1
-Style: Kanji,Noto Sans CJK JP Bold,42,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,2,10,10,165,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

@@ -1,13 +1,13 @@
 import logging
 import os
+import re
+import types
 import pykakasi
 
 from japanese_utils import convert_tokens_to_morae, get_morae_for_text
 from models import LyricLine, MoraTiming
 
 logger = logging.getLogger(__name__)
-
-_SMALL_KANA = set("ゃゅょぁぃぅぇぉゎャュョァィゥェォヮ")
 
 
 def _get_device() -> str:
@@ -90,36 +90,6 @@ def isolate_vocals(audio_path: str, output_dir: str) -> tuple[str, str]:
     logger.info(f"Vocal stem: {vocal_path}")
     logger.info(f"Instrumental stem: {inst_path}")
     return vocal_path, inst_path
-
-
-_LYRIC_PRONUNCIATION_OVERRIDES = {
-    "君": "きみ",
-    "僕": "ぼく",
-}
-
-
-def _preprocess_lyric_text(text: str) -> str:
-    """Apply common Japanese lyric pronunciation fixes (e.g. 君 -> きみ instead of on'yomi kun)."""
-    for kanji, reading in _LYRIC_PRONUNCIATION_OVERRIDES.items():
-        text = text.replace(kanji, reading)
-    return text
-
-
-def _get_line_morae_with_context(line_text: str, k: pykakasi.kakasi) -> list[dict]:
-    """
-    Convert a Japanese line into morae preserving full contextual readings (kun'yomi/on'yomi).
-    Returns list of dicts: {'orig': ..., 'hira': ..., 'rom': ..., 'is_word_end': bool}
-    """
-    morae_data = get_morae_for_text(line_text, k)
-    return [
-        {
-            "orig": m["orig"],
-            "hira": m["mora"],
-            "rom": m["rom"],
-            "is_word_end": m["is_token_end"],
-        }
-        for m in morae_data
-    ]
 
 
 def force_align_japanese(
@@ -210,7 +180,6 @@ def force_align_japanese(
         for idx, lrc_line in enumerate(lrc_guide_lines):
             orig_text = lrc_line.original_text.strip()
             # Clean punctuation spacing and quotes
-            import re
             cleaned_text = re.sub(r"([.,!?;:…])([a-zA-Z])", r"\1 \2", orig_text)
             cleaned_text = (
                 cleaned_text.replace("“", '"')
@@ -273,7 +242,7 @@ def force_align_japanese(
 
                 if words:
                     last_aligned_end = words[-1].end
-                    seg_obj = type("Segment", (), {"words": words})()
+                    seg_obj = types.SimpleNamespace(words=words)
                     segments.append(seg_obj)
                 else:
                     last_aligned_end = lrc_line.end_sec
@@ -282,10 +251,6 @@ def force_align_japanese(
                 logger.warning(f"Slice alignment failed for line '{orig_text}' ({e})")
                 last_aligned_end = lrc_line.end_sec
                 segments.append(None)
-    if not segments:
-        logger.info(f"Running global forced alignment on audio file: {vocal_path}")
-        result = model.align(vocal_path, lyrics_payload, language=global_lang, original_split=True)
-        segments = result.segments if hasattr(result, "segments") and result.segments else []
 
     logger.info(f"Received {len(segments)} segments from stable_whisper.")
 
@@ -305,15 +270,15 @@ def force_align_japanese(
             else:
                 prev_end = lyric_lines[-1].end_sec if lyric_lines else 0.0
                 start_fallback = prev_end + 0.50
-                morae_data = _get_line_morae_with_context(orig_line, k)
+                morae_data = get_morae_for_text(orig_line, k)
                 fallback_morae: list[MoraTiming] = []
                 cur_t = start_fallback
                 for m in morae_data:
                     m_end = cur_t + 0.28
                     fallback_morae.append(
                         MoraTiming(
-                            hiragana=m["hira"],
-                            romaji=m["rom"] + (" " if m["is_word_end"] else ""),
+                            hiragana=m["mora"],
+                            romaji=m["rom"] + (" " if m["is_token_end"] else ""),
                             start_sec=round(cur_t, 3),
                             end_sec=round(m_end, 3),
                         )
