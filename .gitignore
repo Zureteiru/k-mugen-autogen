@@ -20,8 +20,9 @@ downloads/*.m4a
 downloads/*.flac
 downloads/*.ogg
 
-# Retain guide LRCs if downloaded
-!downloads/*.lrc
+# Downloads and generated subtitles
+downloads/
+output/
 
 # IDE and OS
 .DS_Store

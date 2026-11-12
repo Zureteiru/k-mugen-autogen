@@ -13,25 +13,25 @@ This document summarizes the current state, technical decisions, completed featu
 YouTube URL / Local Audio & Video
        │
        ▼ [yt-dlp]
-Download Best Video (.mp4) + Audio (.webm / .mp3)
+Download best video (.mp4) once (also the alignment input)
        │
        ▼ [syncedlyrics + fast_lyrics.py]
-Fetch Synchronized LRC (with localized / romanized artist aliases)
+Fetch Synchronized LRC (or unsynced plain text)
        │
        ▼ [audio-separator / UVR-MDX-NET (optional / as needed)]
 Isolate Vocal Stem
        │
        ▼ [aligner.py + stable-ts (Stable-Whisper)]
-Acoustic Forced Alignment (Global DP or LRC-anchored Window Alignment)
+Acoustic Forced Alignment (one global pass + per-line gate, LRC-anchored window fallback)
        │
-       ▼ [japanese_utils.py + pykakasi]
+       ▼ [japanese_utils.py + fugashi/unidic-lite]
 Phonological Japanese Romanization & Mora Segmentation
        │
        ▼ [ass_compiler.py]
 Continuous Drift-Free Centisecond Tagging ({\k} / {\kf}) -> .ass File
        │
        ▼ [main.py]
-Interactive Desktop mpv Playback Bridge (Windows Task Scheduler / Session 1)
+mpv playback (if mpv is on PATH)
 ```
 
 ---
@@ -40,13 +40,14 @@ Interactive Desktop mpv Playback Bridge (Windows Task Scheduler / Session 1)
 
 | File | Purpose |
 | :--- | :--- |
-| [`main.py`](file:///main.py) | CLI entrypoint, argument parsing, pipeline orchestration, and Windows desktop `mpv` launcher with interactive session bridge. |
-| [`aligner.py`](file:///aligner.py) | Audio forced alignment using `stable-ts` (Whisper). Implements global whole-track alignment with slice-window fallback and offset probing. Vocal stem isolation via MDX-Net. |
-| [`japanese_utils.py`](file:///japanese_utils.py) | Japanese linguistic parser. Sokuon (`っ`/`ッ`) consonant gemination, small kana (`ゃ`/`ゅ`/`ょ`/`ぁ`...) contraction, particle `は` -> `wa` conversion, pykakasi token split repair, bound morpheme space suppression. |
+| [`main.py`](file:///main.py) | CLI entrypoint (positional `source`, optional `--artist`/`--title`), single yt-dlp download, pipeline orchestration, and a plain `mpv` launcher. |
+| [`aligner.py`](file:///aligner.py) | Audio forced alignment using `stable-ts` (Whisper). Implements one global whole-track alignment, a per-line plausibility gate, window re-alignment against the LRC guide with a median offset, and vocal stem isolation via MDX-Net (stems identified by the `(Vocals)` / `(Instrumental)` filename marker). |
+| [`japanese_utils.py`](file:///japanese_utils.py) | Japanese linguistic parser built on fugashi + unidic-lite. Sokuon (`っ`/`ッ`) consonant gemination, small kana (`ゃ`/`ゅ`/`ょ`/`ぁ`...) contraction, particle `は` -> `wa` / `へ` -> `e`, `ー` vowel repetition, and part-of-speech based word-space suppression. |
 | [`ass_compiler.py`](file:///ass_compiler.py) | Compiles `LyricLine` data into Advanced SubStation Alpha (`.ass`) format. Computes continuous absolute centisecond timing (`\k` / `\kf`) to prevent timing drift. |
-| [`fast_lyrics.py`](file:///fast_lyrics.py) | Lyrics fetcher using `syncedlyrics` with fallback alias search. Parses Standard `[mm:ss.xx]` and Enhanced `<mm:ss.xx>` LRC files into line objects. |
-| [`models.py`](file:///models.py) | Dataclasses: `MoraTiming`, `LyricLine`, and `SongBundle`. |
-| [`output/`](file:///output/) | Generated `.ass` files ready for Karaoke Mugen or `mpv`. |
+| [`fast_lyrics.py`](file:///fast_lyrics.py) | Lyrics fetcher using `syncedlyrics` (returns plain text when no timestamps exist). Parses Standard `[mm:ss.xx]` and Enhanced `<mm:ss.xx>` LRC lines, per line, into line objects. |
+| [`models.py`](file:///models.py) | Dataclasses: `MoraTiming` and `LyricLine`. |
+| [`tests/test_core.py`](file:///tests/test_core.py) | pytest regression tests (offline; no Whisper, torch, yt-dlp or network). |
+| `output/` | Generated `.ass` files ready for Karaoke Mugen or `mpv` (git-ignored). |
 
 ---
 
@@ -54,21 +55,14 @@ Interactive Desktop mpv Playback Bridge (Windows Task Scheduler / Session 1)
 
 1. **Strict Japanese Phonological Rules ([`japanese_utils.py`](file:///japanese_utils.py)):**
    - **Sokuon Gemination:** `っ` / `ッ` is strictly geminated to the succeeding consonant (e.g. `kitto`, `nemutta`, `bakku`, `itchatte`). Never rendered as literal `tsu`.
-   - **Pre-pass pykakasi repair:** Fixes splits where pykakasi separates kanji stems before small kana (e.g. `来ちゃった` -> `kichatta` instead of orphaned `ゃ`).
-   - **Particle conversion:** Topic particle `は` -> `wa`.
-   - **Grammatical suffix cohesion:** Inflectional endings (`た`, `て`, `ない`, `たい`, `ます`) stay attached to the preceding verb/adjective stem without unintended spaces.
+   - **Morphological analysis:** readings and parts of speech come from fugashi + unidic-lite.
+   - **Particle conversion:** particle `は` -> `wa`, particle `へ` -> `e`; `ー` repeats the previous vowel.
+   - **Grammatical suffix cohesion:** auxiliaries, conjunctive particles and suffixes (`た`, `て`, `ない`, `たい`, `ます`) stay attached to the preceding stem without unintended spaces.
 2. **Karaoke Mugen ASS Styling & Drift-Free Centisecond Tracking ([`ass_compiler.py`](file:///ass_compiler.py)):**
    - Clean single-layer Romaji subtitle output styled for 1080p karaoke (no distracting duplicate Kanji ruby lines above).
    - Continuous `current_sec` tracking from `event_start_sec`: pauses between words or vocal rests are dynamically encoded as silent `{\k{gap_cs}}` tags, ensuring that later syllables highlight at their exact acoustic time rather than drifting.
-3. **Interactive Windows Desktop Playback ([`main.py`](file:///main.py)):**
-   - When running inside background agent or sandboxed terminals on Windows, GUI apps normally cannot display to the user's screen.
-   - Built an automated bridge via Windows Task Scheduler (`schtasks /create /it /f`) that runs `mpv.exe` directly on the active user session (`Console Session 1`) with `--ontop` and `--autofit=1280x720`.
-4. **Tested Songs & Verified Output:**
-   - *Sakanaction - Shin Takarajima* (`output/Sakanaction - Shin Takarajima.ass`)
-   - *Sakanaction - Ame(A)* (`output/Sakanaction - Ame(A).ass`)
-   - *RADWIMPS - Hyperventilation* (`output/RADWIMPS - Hyperventilation.ass`)
-   - *KOTOKO - I pray to stop my cry* (`output/KOTOKO - I pray to stop my cry.ass`)
-   - *rerulili - Brain Fluid Explosion Girl* (`output/rerulili - Brain Fluid Explosion Girl.ass`)
+3. **Songs used during development** (their old `.ass` outputs predate the remediation, are no longer tracked and are only in git history; regenerate them rather than trusting them):
+   - *Sakanaction - Shin Takarajima*, *Sakanaction - Ame(A)*, *RADWIMPS - Hyperventilation*, *KOTOKO - I pray to stop my cry*, *rerulili - Brain Fluid Explosion Girl*
 
 ---
 
@@ -111,6 +105,6 @@ Interactive Desktop mpv Playback Bridge (Windows Task Scheduler / Session 1)
 # Run in background without opening player window:
 .venv\Scripts\python.exe main.py "https://youtu.be/nueJvP-eMU0" --no-play
 
-# Test playback of an existing ASS file on Windows desktop:
-.venv\Scripts\python.exe -c "import os; from main import _launch_mpv, _find_mpv_binary; mpv_bin = _find_mpv_binary(); ass = os.path.abspath('output/rerulili - Brain Fluid Explosion Girl.ass').replace('\\', '/'); vid = os.path.abspath('downloads/Ey_NHZNYTeE.mp4').replace('\\', '/'); aud = os.path.abspath('downloads/Ey_NHZNYTeE.webm').replace('\\', '/'); _launch_mpv([mpv_bin, '--ontop', f'--sub-file={ass}', f'--audio-file={aud}', vid])"
+# Run the regression tests (offline):
+.venv\Scripts\python.exe -m pytest -q tests/
 ```

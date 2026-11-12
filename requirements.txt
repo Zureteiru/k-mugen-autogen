@@ -4,5 +4,3 @@ fugashi
 unidic-lite
 stable-ts
 audio-separator[cpu]
-pydantic
-pyyaml
