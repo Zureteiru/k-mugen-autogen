@@ -1,8 +1,7 @@
 import re
-import pykakasi
 import syncedlyrics
 
-from japanese_utils import convert_tokens_to_morae, get_morae_for_text
+from japanese_utils import get_morae_for_text
 from models import LyricLine, MoraTiming
 
 
@@ -54,7 +53,7 @@ def _is_credit_or_meta(text: str) -> bool:
     return False
 
 
-def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
+def _parse_lrc(lrc_text: str) -> list[LyricLine]:
     """Parse LRC text into LyricLine objects; each line is word-timed or line-timed on its own."""
     lrc_text = (
         lrc_text.replace("“", '"')
@@ -123,8 +122,7 @@ def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
 
             morae_list: list[MoraTiming] = []
             for txt, w_start, w_end in words_timed:
-                conv = k.convert(txt)
-                morae_data = convert_tokens_to_morae(conv)
+                morae_data = get_morae_for_text(txt)
                 m_count = max(1, len(morae_data))
                 m_dur = max(0.08, w_end - w_start) / m_count
                 for m_i, m in enumerate(morae_data):
@@ -155,7 +153,7 @@ def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
         if _is_credit_or_meta(text):
             continue
 
-        morae_tokens = get_morae_for_text(text, k)
+        morae_tokens = get_morae_for_text(text)
         if not morae_tokens:
             continue
 
@@ -206,7 +204,6 @@ def fetch_and_parse_lyrics(artist: str, title: str) -> tuple[str, list[LyricLine
     Fetch lyrics using syncedlyrics.
     Returns (lyrics_text, parsed_lines); parsed_lines is None when the lyrics have no timestamps.
     """
-    k = pykakasi.kakasi()
     query = f"{artist} {title}".strip()
 
     # 1. Try enhanced word-synced search first
@@ -222,16 +219,13 @@ def fetch_and_parse_lyrics(artist: str, title: str) -> tuple[str, list[LyricLine
     if not re.search(r"\[\d{1,2}:\d{2}", lrc_text):
         return lrc_text.strip(), None
 
-    parsed = _parse_lrc(lrc_text, k)
+    parsed = _parse_lrc(lrc_text)
     if not parsed:
         return None
     return "\n".join(l.original_text for l in parsed), parsed
 
 
-def parse_lrc_text(lrc_text: str, k: pykakasi.kakasi | None = None) -> list[LyricLine]:
-    """Parse raw LRC text string into a list of LyricLine objects."""
-    if k is None:
-        from japanese_utils import get_kakasi
-        k = get_kakasi()
-    return _parse_lrc(lrc_text, k)
+def parse_lrc_text(lrc_text: str, k=None) -> list[LyricLine]:
+    """Parse raw LRC text string into a list of LyricLine objects. `k` is ignored."""
+    return _parse_lrc(lrc_text)
 

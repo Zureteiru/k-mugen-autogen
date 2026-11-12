@@ -3,9 +3,8 @@ import logging
 import os
 import re
 import statistics
-import pykakasi
 
-from japanese_utils import convert_tokens_to_morae, get_morae_for_text
+from japanese_utils import get_morae_for_text
 from models import LyricLine, MoraTiming
 
 logger = logging.getLogger(__name__)
@@ -218,8 +217,6 @@ def force_align_japanese(
         logger.error("stable-ts is required for forced alignment. Install it via: pip install stable-ts")
         raise e
 
-    k = pykakasi.kakasi()
-
     device = _get_device()
     logger.info(f"Loading stable_whisper 'base' model on device '{device}'...")
     try:
@@ -263,7 +260,7 @@ def force_align_japanese(
     for line_idx, orig_line in enumerate(raw_lines):
         guide = guides[line_idx] if guides else None
         prev_end = lyric_lines[-1].end_sec if lyric_lines else 0.0
-        n_morae = len(get_morae_for_text(orig_line, k))
+        n_morae = len(get_morae_for_text(orig_line))
 
         words = global_words[line_idx] or []
         if not _line_is_plausible(words, n_morae, prev_end, guide, offset):
@@ -300,7 +297,7 @@ def force_align_japanese(
             else:
                 prev_end = lyric_lines[-1].end_sec if lyric_lines else 0.0
                 start_fallback = prev_end + 0.50
-                morae_data = get_morae_for_text(orig_line, k)
+                morae_data = get_morae_for_text(orig_line)
                 fallback_morae: list[MoraTiming] = []
                 cur_t = start_fallback
                 for m in morae_data:
@@ -353,7 +350,7 @@ def force_align_japanese(
                     )
                 )
         else:
-            # Japanese text: slice characters from Whisper words and align to pykakasi morae
+            # Japanese text: slice characters from Whisper words and align to morae
             whisper_chars: list[dict] = []
             for w in words:
                 w_txt = "".join(w.word.split())
@@ -369,14 +366,13 @@ def force_align_japanese(
                         "end": w.start + (c_i + 1) * sub,
                     })
 
-            conv = k.convert(orig_line)
-            morae_records = convert_tokens_to_morae(conv)
+            morae_records = get_morae_for_text(orig_line)
 
             token_to_morae: dict[int, list[dict]] = {}
             for m in morae_records:
                 token_to_morae.setdefault(m["token_idx"], []).append(m)
 
-            tokens = [(t_idx, "".join(t.get("orig", "").split())) for t_idx, t in enumerate(conv)]
+            tokens = [(t_idx, "".join(ms[0]["orig"].split())) for t_idx, ms in token_to_morae.items()]
             tokens = [(t_idx, t_orig) for t_idx, t_orig in tokens if t_orig]
             spans = _map_tokens_to_times(whisper_chars, [len(t_orig) for _, t_orig in tokens])
             for (t_idx, _), (t_start, t_end) in zip(tokens, spans):

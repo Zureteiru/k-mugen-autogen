@@ -1,5 +1,4 @@
 import os
-import pykakasi
 from japanese_utils import get_morae_for_text
 from models import LyricLine, MoraTiming
 

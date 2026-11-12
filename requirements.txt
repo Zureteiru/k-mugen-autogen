@@ -1,6 +1,7 @@
 yt-dlp
 syncedlyrics
-pykakasi
+fugashi
+unidic-lite
 stable-ts
 audio-separator[cpu]
 pydantic

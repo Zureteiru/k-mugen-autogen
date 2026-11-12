@@ -1,13 +1,13 @@
 """
-japanese_utils.py: Robust Japanese lyric romanization and mora segmentation.
-Fixes:
-- Sokuon (っ / ッ) is geminated to succeeding consonant (e.g. kitto, nemutta) - NEVER 'tsu'.
-- Topic particle 'は' -> 'wa'.
-- Common pronoun readings (君 -> きみ, 僕 -> ぼく).
-- Inflectional endings (た, て, ない) stay attached without erroneous word spaces.
+japanese_utils.py: Japanese lyric romanization and mora segmentation.
+- Readings and parts of speech come from a morphological analyzer (fugashi + unidic-lite).
+- Sokuon (っ / ッ) is geminated to the succeeding consonant (kitto, nemutta), never 'tsu'.
+- Particles は / へ are romanized 'wa' / 'e'.
+- Auxiliaries, conjunctive particles and suffixes attach to the preceding word without a space.
+- The long-vowel mark ー repeats the previous mora's vowel.
 """
 
-import pykakasi
+import re
 
 _SMALL_KANA = set("ゃゅょぁぃぅぇぉゎャュョァィゥェォヮ")
 
@@ -96,58 +96,87 @@ _KANA_MORA_MAP = {
     "ー": "-",
 }
 
-_OVERRIDES = {"君": "きみ", "僕": "ぼく"}
-
-_ATTACHED_SUFFIXES = {"た", "て", "だ", "で", "ない", "ます", "たって", "てる", "たい"}
-
-_GLOBAL_KAKASI = None
+_TAGGER = None
 
 
-def get_kakasi() -> pykakasi.kakasi:
-    global _GLOBAL_KAKASI
-    if _GLOBAL_KAKASI is None:
-        _GLOBAL_KAKASI = pykakasi.kakasi()
-    return _GLOBAL_KAKASI
+def _get_tagger():
+    global _TAGGER
+    if _TAGGER is None:
+        import fugashi
+
+        _TAGGER = fugashi.Tagger()
+    return _TAGGER
+
+
+def _katakana_to_hiragana(s: str) -> str:
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)
+
+
+def _tokenize(text: str) -> list[dict]:
+    """
+    Split text into word tokens: {"orig", "hira", "pos1", "pos2"}.
+    Punctuation-only pieces are merged into a neighbouring token's "orig", so the "orig" values
+    concatenate (whitespace aside) to the input text.
+    """
+    tokens: list[dict] = []
+    pending = ""
+    for chunk in text.split():
+        if all(ord(c) < 128 for c in chunk):
+            pieces = [{"orig": chunk, "hira": "", "pos1": "", "pos2": ""}]
+        else:
+            pieces = []
+            for w in _get_tagger()(chunk):
+                feat = w.feature
+                kana = getattr(feat, "kana", None)
+                if not kana or kana == "*":
+                    kana = w.surface if re.fullmatch(r"[ぁ-ゖァ-ヶー]+", w.surface) else ""
+                pieces.append({
+                    "orig": w.surface,
+                    "hira": _katakana_to_hiragana(kana),
+                    "pos1": getattr(feat, "pos1", "") or "",
+                    "pos2": getattr(feat, "pos2", "") or "",
+                })
+        if pieces:
+            pieces[0]["start"] = True
+        for piece in pieces:
+            if not any(c.isalnum() for c in piece["orig"]):
+                if tokens:
+                    tokens[-1]["orig"] += piece["orig"]
+                else:
+                    pending += piece["orig"]
+                continue
+            piece["orig"] = pending + piece["orig"]
+            pending = ""
+            tokens.append(piece)
+    return tokens
 
 
 def convert_tokens_to_morae(conv_tokens: list[dict]) -> list[dict]:
     """
-    Given pykakasi conv tokens, convert them into individual morae with accurate Hepburn romaji.
-    - Sokuon (っ / ッ) is converted to geminated consonant of succeeding mora (never 'tsu').
-    - Particle 'は' is converted to 'wa'.
-    - Tokens ending in sokuon (e.g. 眠っ + た) do not insert a space between stem and inflection.
+    Convert tokens ({"orig", "hira", "pos1", "pos2"}) into individual morae with Hepburn romaji.
+    - Sokuon (っ / ッ) is converted to the geminated consonant of the succeeding mora (never 'tsu').
+    - Particle は -> 'wa', particle へ -> 'e'.
+    - ー repeats the previous mora's vowel.
+    - Auxiliaries, conjunctive particles and suffixes do not start a new word (no space before them).
+    The input tokens are not modified.
     """
-    # Pre-pass: mend cases where pykakasi splits kanji before a small kana (e.g. 来ち + ゃった)
-    for i in range(len(conv_tokens) - 1):
-        h2 = conv_tokens[i + 1].get("hira", "")
-        if h2 and h2[0] in _SMALL_KANA:
-            h1 = conv_tokens[i].get("hira", "")
-            if h1:
-                conv_tokens[i]["hira"] = h1[:-1]
-                conv_tokens[i + 1]["hira"] = h1[-1] + h2
-                o1 = conv_tokens[i].get("orig", "")
-                if o1.endswith(h1[-1]):
-                    conv_tokens[i]["orig"] = o1[:-1]
-                    conv_tokens[i + 1]["orig"] = h1[-1] + conv_tokens[i + 1].get("orig", "")
-
     raw_morae: list[dict] = []
+    attach_tokens: set[int] = set()
     for t_idx, t in enumerate(conv_tokens):
         orig = t.get("orig", "").strip()
         hira = t.get("hira", "").strip()
+        pos1 = t.get("pos1", "")
+        pos2 = t.get("pos2", "")
         if not orig:
             continue
 
-        if orig in _OVERRIDES:
-            hira = _OVERRIDES[orig]
-
         # ASCII / Latin words: split by whitespace so each word highlights as a unit
         if all(ord(c) < 128 for c in orig):
-            words = orig.split()
-            for w in words:
+            for w in orig.split():
                 clean_w = w.strip(".,!?\"'()[]{}~…")
                 if clean_w:
                     raw_morae.append({
-                        "orig": clean_w,
+                        "orig": w,
                         "mora": clean_w,
                         "rom": clean_w,
                         "token_idx": t_idx,
@@ -156,7 +185,24 @@ def convert_tokens_to_morae(conv_tokens: list[dict]) -> list[dict]:
                     })
             continue
 
+        if not t.get("start") and (pos1 in ("助動詞", "接尾辞") or pos2 == "接続助詞" or (hira != "" and set(hira) == {"ー"})):
+            attach_tokens.add(t_idx)
+
         chars = [c for c in hira if not c.isspace() and c not in "、。・！？…〜~\"'()[]{}"]
+        if not chars:
+            # No reading available (Latin word next to Japanese punctuation, digits, unknown words):
+            # keep the word as a single unit instead of dropping it.
+            clean = "".join(c for c in orig if c.isalnum())
+            if clean:
+                raw_morae.append({
+                    "orig": orig,
+                    "mora": clean,
+                    "rom": clean,
+                    "token_idx": t_idx,
+                    "is_token_end": True,
+                    "is_sokuon": False,
+                })
+            continue
         token_morae = []
         i = 0
         while i < len(chars):
@@ -175,12 +221,13 @@ def convert_tokens_to_morae(conv_tokens: list[dict]) -> list[dict]:
         for m_idx, m in enumerate(token_morae):
             is_end = (m_idx == len(token_morae) - 1)
             is_sokuon = (m in ("っ", "ッ"))
-            is_wa = False
-            if m == "は":
-                if orig in ("は", "ハ"):
-                    is_wa = True
-                elif is_end and (orig.endswith("は") or orig.endswith("ハ")):
-                    is_wa = True
+
+            rom = None if is_sokuon else _KANA_MORA_MAP.get(m, m)
+            if pos1 == "助詞" and len(token_morae) == 1:
+                if m == "は":
+                    rom = "wa"
+                elif m == "へ":
+                    rom = "e"
 
             # If token ends in sokuon, it attaches to the next token without a space
             if is_end and is_sokuon:
@@ -189,20 +236,18 @@ def convert_tokens_to_morae(conv_tokens: list[dict]) -> list[dict]:
             raw_morae.append({
                 "orig": orig,
                 "mora": m,
-                "rom": "wa" if is_wa else (None if is_sokuon else _KANA_MORA_MAP.get(m, m)),
+                "rom": rom,
                 "token_idx": t_idx,
                 "is_token_end": is_end,
                 "is_sokuon": is_sokuon,
             })
 
-    # Pass 2: attach grammatical suffixes (た / て / ない) to preceding stem without space
-    for idx in range(len(raw_morae) - 1):
-        curr = raw_morae[idx]
-        nxt = raw_morae[idx + 1]
-        if curr["is_token_end"] and curr["token_idx"] != nxt["token_idx"]:
-            nxt_orig = nxt["orig"]
-            if nxt_orig in _ATTACHED_SUFFIXES:
-                curr["is_token_end"] = False
+    # Pass 2: attached tokens (auxiliaries, conjunctive particles, suffixes) join the preceding word
+    for idx in range(1, len(raw_morae)):
+        cur = raw_morae[idx]
+        prev = raw_morae[idx - 1]
+        if cur["token_idx"] in attach_tokens and prev["token_idx"] != cur["token_idx"]:
+            prev["is_token_end"] = False
 
     # Pass 3: resolve sokuon gemination by looking ahead to the next mora
     for idx, item in enumerate(raw_morae):
@@ -224,12 +269,15 @@ def convert_tokens_to_morae(conv_tokens: list[dict]) -> list[dict]:
                 gem = ""
             item["rom"] = gem
 
+    # Pass 4: the long-vowel mark repeats the previous mora's vowel
+    for idx, item in enumerate(raw_morae):
+        if item["mora"] == "ー":
+            prev_rom = raw_morae[idx - 1]["rom"] if idx > 0 else ""
+            item["rom"] = prev_rom[-1] if prev_rom and prev_rom[-1] in "aeiou" else ""
+
     return raw_morae
 
 
-def get_morae_for_text(text: str, k: pykakasi.kakasi | None = None) -> list[dict]:
-    """Tokenize and return list of morae with accurate romaji and word boundary markers."""
-    if k is None:
-        k = get_kakasi()
-    conv = k.convert(text)
-    return convert_tokens_to_morae(conv)
+def get_morae_for_text(text: str, k=None) -> list[dict]:
+    """Tokenize and return list of morae with accurate romaji and word boundary markers. `k` is ignored."""
+    return convert_tokens_to_morae(_tokenize(text))
