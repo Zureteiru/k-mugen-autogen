@@ -138,10 +138,13 @@ def main() -> None:
             raw_lyrics_text = file_content
     else:
         logger.info("Step 1: Attempting to fetch online lyrics...")
-        fallback_lines = fetch_and_parse_lyrics(args.artist, args.title)
-        if fallback_lines:
-            raw_lyrics_text = "\n".join(l.original_text for l in fallback_lines)
-            logger.info(f"Successfully retrieved lyrics text ({len(fallback_lines)} lines).")
+        fetched = fetch_and_parse_lyrics(args.artist, args.title)
+        if fetched:
+            raw_lyrics_text, fallback_lines = fetched
+            if fallback_lines:
+                logger.info(f"Successfully retrieved lyrics text ({len(fallback_lines)} lines).")
+            else:
+                logger.info("Retrieved unsynced lyrics text (no timestamps).")
 
     if not raw_lyrics_text:
         logger.error(

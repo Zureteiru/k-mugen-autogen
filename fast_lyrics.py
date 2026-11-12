@@ -5,14 +5,6 @@ import syncedlyrics
 from japanese_utils import convert_tokens_to_morae, get_morae_for_text
 from models import LyricLine, MoraTiming
 
-_KNOWN_ALIASES = {
-    "sakanaction": "サカナクション",
-    "shin takarajima": "新宝島",
-    "hyperventilation": "ハイパーベンチレイション",
-    "brain fluid explosion girl": "脳漿炸裂ガール",
-    "rerulili": "れるりり",
-}
-
 
 def _parse_timestamp(ts_str: str) -> float:
     """Parse [mm:ss.xx] or <mm:ss.xx> timestamp into seconds as float."""
@@ -63,35 +55,42 @@ def _is_credit_or_meta(text: str) -> bool:
 
 
 def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
-    """Parse Enhanced or Standard LRC text into a list of LyricLine objects."""
+    """Parse LRC text into LyricLine objects; each line is word-timed or line-timed on its own."""
     lrc_text = (
         lrc_text.replace("“", '"')
         .replace("”", '"')
         .replace("’", "'")
         .replace("‘", "'")
     )
-    is_enhanced = bool(re.search(r"<\d{1,2}:\d{2}(?:\.\d+)?>", lrc_text))
     raw_lines = [line.strip() for line in lrc_text.splitlines() if line.strip()]
 
-    if is_enhanced:
-        timed_lines = []
-        for line in raw_lines:
-            if re.match(r"^\[[a-zA-Z]+:", line):
-                continue
+    # (start_sec, content, has_word_tags)
+    entries: list[tuple[float, str, bool]] = []
+    for line in raw_lines:
+        if re.match(r"^\[[a-zA-Z]+:", line):
+            continue
+        if re.search(r"<\d{1,2}:\d{2}(?:\.\d+)?>", line):
             m = re.match(r"^\[(\d{1,2}:\d{2}(?:\.\d+)?)\](.*)", line)
             if m:
-                ts = _parse_timestamp(m.group(1))
-                rest = m.group(2).strip()
-                timed_lines.append((ts, rest))
-            elif re.search(r"<\d{1,2}:\d{2}(?:\.\d+)?>", line):
+                entries.append((_parse_timestamp(m.group(1)), m.group(2).strip(), True))
+            else:
                 first_ts_m = re.search(r"<(\d{1,2}:\d{2}(?:\.\d+)?)>", line)
                 if first_ts_m:
-                    ts = _parse_timestamp(first_ts_m.group(1))
-                    timed_lines.append((ts, line))
+                    entries.append((_parse_timestamp(first_ts_m.group(1)), line, True))
+            continue
+        ts_matches = list(re.finditer(r"\[(\d{1,2}:\d{2}(?:\.\d+)?)\]", line))
+        if not ts_matches:
+            continue
+        text = re.sub(r"\[\d{1,2}:\d{2}(?:\.\d+)?\]", "", line).strip()
+        for m in ts_matches:
+            entries.append((_parse_timestamp(m.group(1)), text, False))
 
-        lyric_lines: list[LyricLine] = []
-        for idx, (line_start, content) in enumerate(timed_lines):
-            next_start = timed_lines[idx + 1][0] if idx + 1 < len(timed_lines) else None
+    entries.sort(key=lambda x: x[0])
+
+    lyric_lines: list[LyricLine] = []
+    for idx, (current_start, content, has_word_tags) in enumerate(entries):
+        if has_word_tags:
+            next_start = entries[idx + 1][0] if idx + 1 < len(entries) else None
             matches = list(re.finditer(r"<(\d{1,2}:\d{2}(?:\.\d+)?)>([^<]*)", content))
             if not matches:
                 continue
@@ -150,24 +149,9 @@ def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
                         morae=morae_list,
                     )
                 )
-        return lyric_lines
-
-    # Standard line-synced LRC
-    entries: list[tuple[float, str]] = []
-    for line in raw_lines:
-        if re.match(r"^\[[a-zA-Z]+:", line):
             continue
-        ts_matches = list(re.finditer(r"\[(\d{1,2}:\d{2}(?:\.\d+)?)\]", line))
-        if not ts_matches:
-            continue
-        text = re.sub(r"\[\d{1,2}:\d{2}(?:\.\d+)?\]", "", line).strip()
-        for m in ts_matches:
-            entries.append((_parse_timestamp(m.group(1)), text))
 
-    entries.sort(key=lambda x: x[0])
-
-    lyric_lines = []
-    for idx, (current_start, text) in enumerate(entries):
+        text = content
         if _is_credit_or_meta(text):
             continue
 
@@ -186,7 +170,7 @@ def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
         natural_duration = mora_count * 0.32
         if next_start is not None and next_start > current_start:
             available_time = next_start - current_start
-            duration = min(available_time - 0.2, max(2.0, natural_duration))
+            duration = max(0.3, min(available_time - 0.2, max(2.0, natural_duration)))
         else:
             duration = max(2.5, natural_duration)
 
@@ -217,10 +201,10 @@ def _parse_lrc(lrc_text: str, k: pykakasi.kakasi) -> list[LyricLine]:
     return lyric_lines
 
 
-def fetch_and_parse_lyrics(artist: str, title: str) -> list[LyricLine] | None:
+def fetch_and_parse_lyrics(artist: str, title: str) -> tuple[str, list[LyricLine] | None] | None:
     """
-    Fetch lyrics using syncedlyrics and parse into a list of LyricLine objects.
-    Tries enhanced (word-synced) first, falling back to line-synced LRC.
+    Fetch lyrics using syncedlyrics.
+    Returns (lyrics_text, parsed_lines); parsed_lines is None when the lyrics have no timestamps.
     """
     k = pykakasi.kakasi()
     query = f"{artist} {title}".strip()
@@ -232,21 +216,16 @@ def fetch_and_parse_lyrics(artist: str, title: str) -> list[LyricLine] | None:
     if not lrc_text:
         lrc_text = syncedlyrics.search(query, providers=["netease", "lrclib"])
 
-    # 3. If romanized search returns nothing, try known Japanese name aliases
-    if not lrc_text:
-        alt_artist = _KNOWN_ALIASES.get(artist.lower().strip(), artist)
-        alt_title = _KNOWN_ALIASES.get(title.lower().strip(), title)
-        alt_query = f"{alt_artist} {alt_title}".strip()
-        if alt_query != query:
-            lrc_text = syncedlyrics.search(alt_query, enhanced=True, providers=["netease", "lrclib"])
-            if not lrc_text:
-                lrc_text = syncedlyrics.search(alt_query, providers=["netease", "lrclib"])
-
     if not lrc_text:
         return None
 
+    if not re.search(r"\[\d{1,2}:\d{2}", lrc_text):
+        return lrc_text.strip(), None
+
     parsed = _parse_lrc(lrc_text, k)
-    return parsed if parsed else None
+    if not parsed:
+        return None
+    return "\n".join(l.original_text for l in parsed), parsed
 
 
 def parse_lrc_text(lrc_text: str, k: pykakasi.kakasi | None = None) -> list[LyricLine]:
