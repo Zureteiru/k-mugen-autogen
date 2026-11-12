@@ -177,6 +177,29 @@ def _shift_line(line: LyricLine, offset: float) -> LyricLine:
     )
 
 
+def _map_tokens_to_times(whisper_chars: list[dict], token_lens: list[int]) -> list[tuple[float, float]]:
+    """Map each token (of token_lens characters) onto the Whisper characters; returns (start, end) per token."""
+    W = len(whisper_chars)
+    T = sum(token_lens)
+    if W == 0 or T == 0:
+        return []
+
+    spans: list[tuple[float, float]] = []
+    pos = 0
+    for n in token_lens:
+        if n <= 0:
+            raise ValueError(f"token length must be positive, got {n}")
+        if W == T:
+            lo = pos
+            hi = pos + n - 1
+        else:
+            lo = int(pos * W / T)
+            hi = max(lo, int((pos + n) * W / T) - 1)
+        spans.append((whisper_chars[lo]["start"], whisper_chars[hi]["end"]))
+        pos += n
+    return spans
+
+
 def force_align_japanese(
     vocal_path: str,
     raw_lyrics_text: str,
@@ -308,14 +331,6 @@ def force_align_japanese(
                 )
             continue
 
-        # Detect intra-line anomalous gaps (> 2.0s silence)
-        for j in range(1, len(words)):
-            gap = words[j].start - words[j - 1].end
-            if gap > 2.0:
-                words[j].start = words[j - 1].end
-                w_dur = max(0.25, len(words[j].word.strip()) * 0.25)
-                words[j].end = words[j].start + w_dur
-
         is_ja = any(
             ("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff")
             for c in orig_line
@@ -348,8 +363,10 @@ def force_align_japanese(
             # Japanese text: slice characters from Whisper words and align to pykakasi morae
             whisper_chars: list[dict] = []
             for w in words:
-                w_txt = w.word.strip()
+                w_txt = "".join(w.word.split())
                 n = len(w_txt)
+                if n == 0:
+                    continue
                 dur = max(0.08, w.end - w.start)
                 sub = dur / n
                 for c_i, ch in enumerate(w_txt):
@@ -366,20 +383,10 @@ def force_align_japanese(
             for m in morae_records:
                 token_to_morae.setdefault(m["token_idx"], []).append(m)
 
-            char_pos = 0
-            for t_idx, t in enumerate(conv):
-                t_orig = t.get("orig", "").strip()
-                if not t_orig:
-                    continue
-
-                c_len = len(t_orig)
-                c_start_idx = min(len(whisper_chars) - 1, char_pos)
-                c_end_idx = min(len(whisper_chars) - 1, char_pos + c_len - 1)
-                char_pos += c_len
-
-                t_start = whisper_chars[c_start_idx]["start"]
-                t_end = whisper_chars[c_end_idx]["end"]
-
+            tokens = [(t_idx, "".join(t.get("orig", "").split())) for t_idx, t in enumerate(conv)]
+            tokens = [(t_idx, t_orig) for t_idx, t_orig in tokens if t_orig]
+            spans = _map_tokens_to_times(whisper_chars, [len(t_orig) for _, t_orig in tokens])
+            for (t_idx, _), (t_start, t_end) in zip(tokens, spans):
                 m_list = token_to_morae.get(t_idx, [])
                 if not m_list:
                     continue
@@ -401,6 +408,9 @@ def force_align_japanese(
                             end_sec=round(m_e, 3),
                         )
                     )
+
+        if any(b.start_sec < a.start_sec for a, b in zip(line_mora_timings, line_mora_timings[1:])):
+            logger.warning(f"Mora start times are not non-decreasing in line: {orig_line}")
 
         if line_mora_timings:
             line_start = line_mora_timings[0].start_sec
